@@ -111,6 +111,8 @@ PSR-12's default method-naming sniff requires camelCase, which conflicts with PH
 
 - [ ] **Step 4: Create `phpstan.neon`**
 
+`bootstrapFiles` includes Action Scheduler's `functions.php` (needed from Task 11 onward, where the code first calls `as_*` functions). PHPStan doesn't discover global functions the way Composer's own autoloader does at runtime — Composer's "files" autoload entries make a function callable at runtime, but PHPStan's static analysis only knows a function exists if it's told to scan the file declaring it, via `bootstrapFiles` or `scanFiles`. Without this, PHPStan reports "function not found" for every `as_*` call even though the code runs correctly.
+
 ```yaml
 includes:
     - vendor/szepeviktor/phpstan-wordpress/extension.neon
@@ -119,6 +121,8 @@ parameters:
     level: 8
     paths:
         - src
+    bootstrapFiles:
+        - vendor/woocommerce/action-scheduler/functions.php
 ```
 
 - [ ] **Step 5: Create `phpunit.xml.dist`**
