@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Markout\Router;
 
-interface RouterInterface
-{
-    public function register(): void;
+interface RouterInterface {
+
+	public function register(): void;
 }

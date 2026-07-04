@@ -6,34 +6,32 @@ namespace Markout\Conversion;
 
 use League\HTMLToMarkdown\HtmlConverter;
 
-final class HtmlToMarkdownConverter implements ConverterInterface
-{
-    private HtmlConverter $converter;
+final class HtmlToMarkdownConverter implements ConverterInterface {
 
-    public function __construct(?HtmlConverter $converter = null)
-    {
-        $this->converter = $converter ?? new HtmlConverter(['strip_tags' => true]);
-    }
+	private HtmlConverter $converter;
 
-    public function convert(string $html): string
-    {
-        try {
-            return $this->converter->convert($html);
-        } catch (\Throwable $exception) {
-            if (defined('WP_DEBUG') && WP_DEBUG) {
-                error_log(sprintf('Markout: HTML to Markdown conversion failed: %s', $exception->getMessage()));
-            }
+	public function __construct( ?HtmlConverter $converter = null ) {
+		$this->converter = $converter ?? new HtmlConverter( array( 'strip_tags' => true ) );
+	}
 
-            return $this->fallback($html);
-        }
-    }
+	public function convert( string $html ): string {
+		try {
+			return $this->converter->convert( $html );
+		} catch ( \Throwable $exception ) {
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- gated behind WP_DEBUG, not left in a hot path.
+				error_log( sprintf( 'Markout: HTML to Markdown conversion failed: %s', $exception->getMessage() ) );
+			}
 
-    private function fallback(string $html): string
-    {
-        if (function_exists('wp_strip_all_tags')) {
-            return wp_strip_all_tags($html);
-        }
+			return $this->fallback( $html );
+		}
+	}
 
-        return trim(strip_tags($html));
-    }
+	private function fallback( string $html ): string {
+		if ( function_exists( 'wp_strip_all_tags' ) ) {
+			return wp_strip_all_tags( $html );
+		}
+
+		return trim( strip_tags( $html ) );
+	}
 }

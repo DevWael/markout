@@ -12,177 +12,158 @@ use Markout\Http\MarkdownResponder;
 use Markout\Support\PostVisibility;
 use Markout\Tests\TestCase;
 
-final class MarkdownResponderTest extends TestCase
-{
-    private function meta(): array
-    {
-        return [
-            'title' => 'Hello',
-            'date' => '2026-07-04T00:00:00+00:00',
-            'author' => 'Ahmad',
-            'permalink' => 'https://example.com/hello/',
-        ];
-    }
+final class MarkdownResponderTest extends TestCase {
 
-    public function test_respond_returns_403_when_password_required(): void
-    {
-        Functions\when('post_password_required')->justReturn(true);
+	private function meta(): array {
+		return array(
+			'title'     => 'Hello',
+			'date'      => '2026-07-04T00:00:00+00:00',
+			'author'    => 'Ahmad',
+			'permalink' => 'https://example.com/hello/',
+		);
+	}
 
-        $responder = new MarkdownResponder(
-            $this->cacheReturning(null),
-            $this->converterReturning('BODY'),
-            new FrontmatterBuilder(),
-            new PostVisibility()
-        );
+	public function test_respond_returns_403_when_password_required(): void {
+		Functions\when( 'post_password_required' )->justReturn( true );
 
-        $response = $responder->respond(new \WP_Post(), $this->meta());
+		$responder = new MarkdownResponder(
+			$this->cacheReturning( null ),
+			$this->converterReturning( 'BODY' ),
+			new FrontmatterBuilder(),
+			new PostVisibility()
+		);
 
-        self::assertSame(403, $response->status);
-        self::assertSame('text/plain; charset=utf-8', $response->contentType);
-    }
+		$response = $responder->respond( new \WP_Post(), $this->meta() );
 
-    public function test_respond_returns_cached_content_on_hit(): void
-    {
-        Functions\when('post_password_required')->justReturn(false);
+		self::assertSame( 403, $response->status );
+		self::assertSame( 'text/plain; charset=utf-8', $response->contentType );
+	}
 
-        $responder = new MarkdownResponder(
-            $this->cacheReturning('cached markdown'),
-            $this->converterReturning('BODY'),
-            new FrontmatterBuilder(),
-            new PostVisibility()
-        );
+	public function test_respond_returns_cached_content_on_hit(): void {
+		Functions\when( 'post_password_required' )->justReturn( false );
 
-        $response = $responder->respond(new \WP_Post(), $this->meta());
+		$responder = new MarkdownResponder(
+			$this->cacheReturning( 'cached markdown' ),
+			$this->converterReturning( 'BODY' ),
+			new FrontmatterBuilder(),
+			new PostVisibility()
+		);
 
-        self::assertSame(200, $response->status);
-        self::assertSame('text/markdown; charset=utf-8', $response->contentType);
-        self::assertSame('cached markdown', $response->body);
-    }
+		$response = $responder->respond( new \WP_Post(), $this->meta() );
 
-    public function test_respond_generates_and_writes_to_cache_on_miss(): void
-    {
-        Functions\when('post_password_required')->justReturn(false);
+		self::assertSame( 200, $response->status );
+		self::assertSame( 'text/markdown; charset=utf-8', $response->contentType );
+		self::assertSame( 'cached markdown', $response->body );
+	}
 
-        $cache = new class implements CacheInterface {
-            public array $writes = [];
+	public function test_respond_generates_and_writes_to_cache_on_miss(): void {
+		Functions\when( 'post_password_required' )->justReturn( false );
 
-            public function get(int $postId): ?string
-            {
-                return null;
-            }
+		$cache = new class() implements CacheInterface {
+			public array $writes = array();
 
-            public function write(int $postId, string $content): bool
-            {
-                $this->writes[] = [$postId, $content];
+			public function get( int $postId ): ?string {
+				return null;
+			}
 
-                return true;
-            }
+			public function write( int $postId, string $content ): bool {
+				$this->writes[] = array( $postId, $content );
 
-            public function delete(int $postId): bool
-            {
-                return true;
-            }
-        };
+				return true;
+			}
 
-        $post = new \WP_Post();
-        $post->ID = 42;
+			public function delete( int $postId ): bool {
+				return true;
+			}
+		};
 
-        $responder = new MarkdownResponder(
-            $cache,
-            $this->converterReturning('BODY'),
-            new FrontmatterBuilder(),
-            new PostVisibility()
-        );
+		$post     = new \WP_Post();
+		$post->ID = 42;
 
-        $response = $responder->respond($post, $this->meta());
+		$responder = new MarkdownResponder(
+			$cache,
+			$this->converterReturning( 'BODY' ),
+			new FrontmatterBuilder(),
+			new PostVisibility()
+		);
 
-        self::assertSame(200, $response->status);
-        self::assertStringContainsString('BODY', $response->body);
-        self::assertCount(1, $cache->writes);
-        self::assertSame(42, $cache->writes[0][0]);
-    }
+		$response = $responder->respond( $post, $this->meta() );
 
-    public function test_respond_does_not_cache_when_post_has_password_even_if_visitor_is_authorized(): void
-    {
-        // Visitor has entered the correct password (wp-postpass cookie set),
-        // so post_password_required() returns false — but the post itself
-        // is still password-protected.
-        Functions\when('post_password_required')->justReturn(false);
+		self::assertSame( 200, $response->status );
+		self::assertStringContainsString( 'BODY', $response->body );
+		self::assertCount( 1, $cache->writes );
+		self::assertSame( 42, $cache->writes[0][0] );
+	}
 
-        $cache = new class implements CacheInterface {
-            public array $writes = [];
+	public function test_respond_does_not_cache_when_post_has_password_even_if_visitor_is_authorized(): void {
+		// Visitor has entered the correct password (wp-postpass cookie set),
+		// so post_password_required() returns false — but the post itself
+		// is still password-protected.
+		Functions\when( 'post_password_required' )->justReturn( false );
 
-            public function get(int $postId): ?string
-            {
-                return null;
-            }
+		$cache = new class() implements CacheInterface {
+			public array $writes = array();
 
-            public function write(int $postId, string $content): bool
-            {
-                $this->writes[] = [$postId, $content];
+			public function get( int $postId ): ?string {
+				return null;
+			}
 
-                return true;
-            }
+			public function write( int $postId, string $content ): bool {
+				$this->writes[] = array( $postId, $content );
 
-            public function delete(int $postId): bool
-            {
-                return true;
-            }
-        };
+				return true;
+			}
 
-        $post = new \WP_Post();
-        $post->ID = 42;
-        $post->post_password = 'secret';
+			public function delete( int $postId ): bool {
+				return true;
+			}
+		};
 
-        $responder = new MarkdownResponder(
-            $cache,
-            $this->converterReturning('BODY'),
-            new FrontmatterBuilder(),
-            new PostVisibility()
-        );
+		$post                = new \WP_Post();
+		$post->ID            = 42;
+		$post->post_password = 'secret';
 
-        $response = $responder->respond($post, $this->meta());
+		$responder = new MarkdownResponder(
+			$cache,
+			$this->converterReturning( 'BODY' ),
+			new FrontmatterBuilder(),
+			new PostVisibility()
+		);
 
-        self::assertSame(200, $response->status);
-        self::assertStringContainsString('BODY', $response->body);
-        self::assertCount(0, $cache->writes);
-    }
+		$response = $responder->respond( $post, $this->meta() );
 
-    private function cacheReturning(?string $value): CacheInterface
-    {
-        return new class ($value) implements CacheInterface {
-            public function __construct(private ?string $value)
-            {
-            }
+		self::assertSame( 200, $response->status );
+		self::assertStringContainsString( 'BODY', $response->body );
+		self::assertCount( 0, $cache->writes );
+	}
 
-            public function get(int $postId): ?string
-            {
-                return $this->value;
-            }
+	private function cacheReturning( ?string $value ): CacheInterface {
+		return new class($value) implements CacheInterface {
+			public function __construct( private ?string $value ) {
+			}
 
-            public function write(int $postId, string $content): bool
-            {
-                return true;
-            }
+			public function get( int $postId ): ?string {
+				return $this->value;
+			}
 
-            public function delete(int $postId): bool
-            {
-                return true;
-            }
-        };
-    }
+			public function write( int $postId, string $content ): bool {
+				return true;
+			}
 
-    private function converterReturning(string $value): ConverterInterface
-    {
-        return new class ($value) implements ConverterInterface {
-            public function __construct(private string $value)
-            {
-            }
+			public function delete( int $postId ): bool {
+				return true;
+			}
+		};
+	}
 
-            public function convert(string $html): string
-            {
-                return $this->value;
-            }
-        };
-    }
+	private function converterReturning( string $value ): ConverterInterface {
+		return new class($value) implements ConverterInterface {
+			public function __construct( private string $value ) {
+			}
+
+			public function convert( string $html ): string {
+				return $this->value;
+			}
+		};
+	}
 }

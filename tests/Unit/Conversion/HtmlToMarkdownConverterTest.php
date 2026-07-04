@@ -9,84 +9,80 @@ use League\HTMLToMarkdown\HtmlConverter;
 use Markout\Conversion\HtmlToMarkdownConverter;
 use Markout\Tests\TestCase;
 
-final class HtmlToMarkdownConverterTest extends TestCase
-{
-    public function test_convert_turns_html_into_markdown(): void
-    {
-        $converter = new HtmlToMarkdownConverter();
+final class HtmlToMarkdownConverterTest extends TestCase {
 
-        $result = $converter->convert('<p>Hello <strong>World</strong></p>');
+	public function test_convert_turns_html_into_markdown(): void {
+		$converter = new HtmlToMarkdownConverter();
 
-        self::assertSame('Hello **World**', trim($result));
-    }
+		$result = $converter->convert( '<p>Hello <strong>World</strong></p>' );
 
-    public function test_convert_falls_back_to_stripped_tags_on_failure(): void
-    {
-        $throwingConverter = new class (['strip_tags' => true]) extends HtmlConverter {
-            public function convert(string $html): string
-            {
-                throw new \RuntimeException('boom');
-            }
-        };
+		self::assertSame( 'Hello **World**', trim( $result ) );
+	}
 
-        $converter = new HtmlToMarkdownConverter($throwingConverter);
+	public function test_convert_falls_back_to_stripped_tags_on_failure(): void {
+		$throwingConverter = new class(array( 'strip_tags' => true )) extends HtmlConverter {
+			// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- must match the parent's exact signature to override it.
+			public function convert( string $html ): string {
+				throw new \RuntimeException( 'boom' );
+			}
+		};
 
-        $result = $converter->convert('<p>Hello <strong>World</strong></p>');
+		$converter = new HtmlToMarkdownConverter( $throwingConverter );
 
-        self::assertSame('Hello World', trim($result));
-    }
+		$result = $converter->convert( '<p>Hello <strong>World</strong></p>' );
 
-    public function test_convert_fallback_prefers_wp_strip_all_tags_when_available(): void
-    {
-        // When wp_strip_all_tags() exists, the fallback must use it rather than
-        // the plain strip_tags() branch.
-        Functions\when('wp_strip_all_tags')->alias(
-            static fn (string $html): string => 'WP-STRIPPED'
-        );
+		self::assertSame( 'Hello World', trim( $result ) );
+	}
 
-        $converter = new HtmlToMarkdownConverter($this->throwingConverter());
+	public function test_convert_fallback_prefers_wp_strip_all_tags_when_available(): void {
+		// When wp_strip_all_tags() exists, the fallback must use it rather than
+		// the plain strip_tags() branch.
+		Functions\when( 'wp_strip_all_tags' )->alias(
+			// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- the mock only needs to match wp_strip_all_tags()'s signature, not use its input.
+			static fn ( string $html ): string => 'WP-STRIPPED'
+		);
 
-        self::assertSame('WP-STRIPPED', $converter->convert('<p>anything</p>'));
-    }
+		$converter = new HtmlToMarkdownConverter( $this->throwingConverter() );
 
-    /**
-     * @runInSeparateProcess
-     * @preserveGlobalState disabled
-     */
-    public function test_convert_logs_conversion_failure_when_wp_debug_enabled(): void
-    {
-        // Separate process so defining WP_DEBUG does not leak. With WP_DEBUG on,
-        // the caught-exception path emits an error_log line, which we capture.
-        define('WP_DEBUG', true);
+		self::assertSame( 'WP-STRIPPED', $converter->convert( '<p>anything</p>' ) );
+	}
 
-        $logFile = sys_get_temp_dir() . '/markout-conv-log-' . uniqid('', true) . '.log';
-        $previous = ini_set('error_log', $logFile);
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_convert_logs_conversion_failure_when_wp_debug_enabled(): void {
+		// Separate process so defining WP_DEBUG does not leak. With WP_DEBUG on,
+		// the caught-exception path emits an error_log line, which we capture.
+		define( 'WP_DEBUG', true );
 
-        $converter = new HtmlToMarkdownConverter($this->throwingConverter());
+		$logFile  = sys_get_temp_dir() . '/markout-conv-log-' . uniqid( '', true ) . '.log';
+		$previous = ini_set( 'error_log', $logFile );
 
-        try {
-            self::assertSame('Hello World', trim($converter->convert('<p>Hello <strong>World</strong></p>')));
+		$converter = new HtmlToMarkdownConverter( $this->throwingConverter() );
 
-            self::assertFileExists($logFile);
-            self::assertStringContainsString(
-                'Markout: HTML to Markdown conversion failed: boom',
-                (string) file_get_contents($logFile)
-            );
-        } finally {
-            if ($previous !== false) {
-                ini_set('error_log', $previous);
-            }
-            @unlink($logFile);
-        }
-    }
+		try {
+			self::assertSame( 'Hello World', trim( $converter->convert( '<p>Hello <strong>World</strong></p>' ) ) );
 
-    private function throwingConverter(): HtmlConverter
-    {
-        return new class (['strip_tags' => true]) extends HtmlConverter {
-            public function convert(string $html): string
-            {
-                throw new \RuntimeException('boom');
-            }
-        };
-    }
+			self::assertFileExists( $logFile );
+			self::assertStringContainsString(
+				'Markout: HTML to Markdown conversion failed: boom',
+				(string) file_get_contents( $logFile )
+			);
+		} finally {
+			if ( false !== $previous ) {
+				ini_set( 'error_log', $previous );
+			}
+			@unlink( $logFile );
+		}
+	}
+
+	private function throwingConverter(): HtmlConverter {
+		return new class(array( 'strip_tags' => true )) extends HtmlConverter {
+			// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- must match the parent's exact signature to override it.
+			public function convert( string $html ): string {
+				throw new \RuntimeException( 'boom' );
+			}
+		};
+	}
 }

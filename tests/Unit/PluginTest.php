@@ -8,123 +8,117 @@ use Brain\Monkey\Functions;
 use Markout\Plugin;
 use Markout\Tests\TestCase;
 
-final class PluginTest extends TestCase
-{
-    private function cacheDir(): string
-    {
-        return sys_get_temp_dir() . '/markout-plugin-test-' . uniqid('', true);
-    }
+final class PluginTest extends TestCase {
 
-    public function test_boot_registers_hooks(): void
-    {
-        Functions\expect('add_action')->atLeast()->once();
+	private function cacheDir(): string {
+		return sys_get_temp_dir() . '/markout-plugin-test-' . uniqid( '', true );
+	}
 
-        $plugin = new Plugin($this->cacheDir());
+	public function test_boot_registers_hooks(): void {
+		Functions\expect( 'add_action' )->atLeast()->once();
 
-        $plugin->boot();
+		$plugin = new Plugin( $this->cacheDir() );
 
-        self::assertTrue(true);
-    }
+		$plugin->boot();
 
-    public function test_boot_schedules_backfill_once_when_option_is_new(): void
-    {
-        Functions\when('add_action')->justReturn(true);
-        // add_option returns true => the backfill has not been scheduled before.
-        Functions\when('add_option')->justReturn(true);
+		self::assertTrue( true );
+	}
 
-        $scheduled = null;
-        Functions\when('as_schedule_single_action')->alias(
-            static function (int $timestamp, string $hook, array $args, string $group) use (&$scheduled): void {
-                $scheduled = [$hook, $args, $group];
-            }
-        );
+	public function test_boot_schedules_backfill_once_when_option_is_new(): void {
+		Functions\when( 'add_action' )->justReturn( true );
+		// add_option returns true => the backfill has not been scheduled before.
+		Functions\when( 'add_option' )->justReturn( true );
 
-        $plugin = new Plugin($this->cacheDir());
-        $plugin->boot();
+		$scheduled = null;
+		Functions\when( 'as_schedule_single_action' )->alias(
+			static function ( int $timestamp, string $hook, array $args, string $group ) use ( &$scheduled ): void {
+				$scheduled = array( $hook, $args, $group );
+			}
+		);
 
-        self::assertSame(
-            [\Markout\Scheduler\BackfillScheduler::HOOK, [0], 'markout'],
-            $scheduled
-        );
-    }
+		$plugin = new Plugin( $this->cacheDir() );
+		$plugin->boot();
 
-    public function test_boot_does_not_reschedule_backfill_when_option_already_exists(): void
-    {
-        Functions\when('add_action')->justReturn(true);
-        // add_option returns false => option already exists, so no scheduling.
-        Functions\when('add_option')->justReturn(false);
+		self::assertSame(
+			array( \Markout\Scheduler\BackfillScheduler::HOOK, array( 0 ), 'markout' ),
+			$scheduled
+		);
+	}
 
-        $scheduledCalls = 0;
-        Functions\when('as_schedule_single_action')->alias(
-            static function () use (&$scheduledCalls): void {
-                $scheduledCalls++;
-            }
-        );
+	public function test_boot_does_not_reschedule_backfill_when_option_already_exists(): void {
+		Functions\when( 'add_action' )->justReturn( true );
+		// add_option returns false => option already exists, so no scheduling.
+		Functions\when( 'add_option' )->justReturn( false );
 
-        $plugin = new Plugin($this->cacheDir());
-        $plugin->boot();
+		$scheduledCalls = 0;
+		Functions\when( 'as_schedule_single_action' )->alias(
+			static function () use ( &$scheduledCalls ): void {
+				$scheduledCalls++;
+			}
+		);
 
-        self::assertSame(0, $scheduledCalls);
-    }
+		$plugin = new Plugin( $this->cacheDir() );
+		$plugin->boot();
 
-    public function test_activate_flushes_rewrite_rules(): void
-    {
-        $flushed = 0;
-        Functions\when('flush_rewrite_rules')->alias(
-            static function () use (&$flushed): void {
-                $flushed++;
-            }
-        );
+		self::assertSame( 0, $scheduledCalls );
+	}
 
-        Plugin::activate();
+	public function test_activate_flushes_rewrite_rules(): void {
+		$flushed = 0;
+		Functions\when( 'flush_rewrite_rules' )->alias(
+			static function () use ( &$flushed ): void {
+				$flushed++;
+			}
+		);
 
-        self::assertSame(1, $flushed);
-    }
+		Plugin::activate();
 
-    public function test_deactivate_flushes_rules_deletes_option_and_unschedules_actions(): void
-    {
-        $flushed = 0;
-        Functions\when('flush_rewrite_rules')->alias(
-            static function () use (&$flushed): void {
-                $flushed++;
-            }
-        );
+		self::assertSame( 1, $flushed );
+	}
 
-        $deletedOption = null;
-        Functions\when('delete_option')->alias(
-            static function (string $name) use (&$deletedOption): void {
-                $deletedOption = $name;
-            }
-        );
+	public function test_deactivate_flushes_rules_deletes_option_and_unschedules_actions(): void {
+		$flushed = 0;
+		Functions\when( 'flush_rewrite_rules' )->alias(
+			static function () use ( &$flushed ): void {
+				$flushed++;
+			}
+		);
 
-        // Each hook MUST be unscheduled with a null args wildcard, not an
-        // empty-array filter. Passing [] makes Action Scheduler exact-match
-        // actions with literally no args, so it would never match this
-        // plugin's actions (scheduled with [$postId] / [$offset]) and the
-        // cleanup would silently no-op. Regression guard for that bug.
-        //
-        // Mockery::mustBe() forces strict (===) comparison on the args
-        // argument. The default ->with() matcher compares loosely (==), under
-        // which null == [] is true, so it would pass even for the buggy []
-        // call and fail to catch the regression.
-        Functions\expect('as_unschedule_all_actions')
-            ->once()
-            ->with(
-                \Markout\Scheduler\ActionSchedulerRegenerator::REGENERATE_HOOK,
-                \Mockery::mustBe(null),
-                'markout'
-            );
-        Functions\expect('as_unschedule_all_actions')
-            ->once()
-            ->with(
-                \Markout\Scheduler\BackfillScheduler::HOOK,
-                \Mockery::mustBe(null),
-                'markout'
-            );
+		$deletedOption = null;
+		Functions\when( 'delete_option' )->alias(
+			static function ( string $name ) use ( &$deletedOption ): void {
+				$deletedOption = $name;
+			}
+		);
 
-        Plugin::deactivate();
+		// Each hook MUST be unscheduled with a null args wildcard, not an
+		// empty-array filter. Passing [] makes Action Scheduler exact-match
+		// actions with literally no args, so it would never match this
+		// plugin's actions (scheduled with [$postId] / [$offset]) and the
+		// cleanup would silently no-op. Regression guard for that bug.
+		//
+		// Mockery::mustBe() forces strict (===) comparison on the args
+		// argument. The default ->with() matcher compares loosely (==), under
+		// which null == [] is true, so it would pass even for the buggy []
+		// call and fail to catch the regression.
+		Functions\expect( 'as_unschedule_all_actions' )
+			->once()
+			->with(
+				\Markout\Scheduler\ActionSchedulerRegenerator::REGENERATE_HOOK,
+				\Mockery::mustBe( null ),
+				'markout'
+			);
+		Functions\expect( 'as_unschedule_all_actions' )
+			->once()
+			->with(
+				\Markout\Scheduler\BackfillScheduler::HOOK,
+				\Mockery::mustBe( null ),
+				'markout'
+			);
 
-        self::assertSame(1, $flushed);
-        self::assertSame('markout_backfill_scheduled', $deletedOption);
-    }
+		Plugin::deactivate();
+
+		self::assertSame( 1, $flushed );
+		self::assertSame( 'markout_backfill_scheduled', $deletedOption );
+	}
 }

@@ -9,142 +9,131 @@ use Markout\Http\MarkdownRequestHandlerInterface;
 use Markout\Router\EndpointRouter;
 use Markout\Tests\TestCase;
 
-final class EndpointRouterTest extends TestCase
-{
-    protected function tearDown(): void
-    {
-        unset($GLOBALS['wp']);
-        parent::tearDown();
-    }
+final class EndpointRouterTest extends TestCase {
 
-    public function test_is_markdown_request_true_when_md_key_present(): void
-    {
-        $router = new EndpointRouter($this->fakeHandler());
+	protected function tearDown(): void {
+		unset( $GLOBALS['wp'] );
+		parent::tearDown();
+	}
 
-        self::assertTrue($router->isMarkdownRequest(['md' => '']));
-    }
+	public function test_is_markdown_request_true_when_md_key_present(): void {
+		$router = new EndpointRouter( $this->fakeHandler() );
 
-    public function test_is_markdown_request_false_when_md_key_absent(): void
-    {
-        $router = new EndpointRouter($this->fakeHandler());
+		self::assertTrue( $router->isMarkdownRequest( array( 'md' => '' ) ) );
+	}
 
-        self::assertFalse($router->isMarkdownRequest(['page' => '2']));
-    }
+	public function test_is_markdown_request_false_when_md_key_absent(): void {
+		$router = new EndpointRouter( $this->fakeHandler() );
 
-    public function test_maybe_respond_invokes_handler_for_matching_singular_post(): void
-    {
-        $post = new \WP_Post();
-        $post->ID = 7;
+		self::assertFalse( $router->isMarkdownRequest( array( 'page' => '2' ) ) );
+	}
 
-        $handler = $this->fakeHandler();
-        $router = new EndpointRouter($handler);
+	public function test_maybe_respond_invokes_handler_for_matching_singular_post(): void {
+		$post     = new \WP_Post();
+		$post->ID = 7;
 
-        $GLOBALS['wp'] = (object) ['query_vars' => ['md' => '']];
+		$handler = $this->fakeHandler();
+		$router  = new EndpointRouter( $handler );
 
-        Functions\when('is_singular')->justReturn(true);
-        Functions\when('get_queried_object')->justReturn($post);
+		$GLOBALS['wp'] = (object) array( 'query_vars' => array( 'md' => '' ) );
 
-        $router->maybeRespond();
+		Functions\when( 'is_singular' )->justReturn( true );
+		Functions\when( 'get_queried_object' )->justReturn( $post );
 
-        self::assertSame($post, $handler->handledPost);
-    }
+		$router->maybeRespond();
 
-    public function test_maybe_respond_does_nothing_when_not_a_markdown_request(): void
-    {
-        $handler = $this->fakeHandler();
-        $router = new EndpointRouter($handler);
+		self::assertSame( $post, $handler->handledPost );
+	}
 
-        $GLOBALS['wp'] = (object) ['query_vars' => []];
+	public function test_maybe_respond_does_nothing_when_not_a_markdown_request(): void {
+		$handler = $this->fakeHandler();
+		$router  = new EndpointRouter( $handler );
 
-        $router->maybeRespond();
+		$GLOBALS['wp'] = (object) array( 'query_vars' => array() );
 
-        self::assertNull($handler->handledPost);
-    }
+		$router->maybeRespond();
 
-    public function test_maybe_respond_does_nothing_when_not_singular(): void
-    {
-        $handler = $this->fakeHandler();
-        $router = new EndpointRouter($handler);
+		self::assertNull( $handler->handledPost );
+	}
 
-        $GLOBALS['wp'] = (object) ['query_vars' => ['md' => '']];
+	public function test_maybe_respond_does_nothing_when_not_singular(): void {
+		$handler = $this->fakeHandler();
+		$router  = new EndpointRouter( $handler );
 
-        Functions\when('is_singular')->justReturn(false);
+		$GLOBALS['wp'] = (object) array( 'query_vars' => array( 'md' => '' ) );
 
-        $router->maybeRespond();
+		Functions\when( 'is_singular' )->justReturn( false );
 
-        self::assertNull($handler->handledPost);
-    }
+		$router->maybeRespond();
 
-    public function test_maybe_respond_does_nothing_when_queried_object_is_not_a_post(): void
-    {
-        $handler = $this->fakeHandler();
-        $router = new EndpointRouter($handler);
+		self::assertNull( $handler->handledPost );
+	}
 
-        $GLOBALS['wp'] = (object) ['query_vars' => ['md' => '']];
+	public function test_maybe_respond_does_nothing_when_queried_object_is_not_a_post(): void {
+		$handler = $this->fakeHandler();
+		$router  = new EndpointRouter( $handler );
 
-        Functions\when('is_singular')->justReturn(true);
-        // e.g. a term/user archive object, or null — anything that is not WP_Post.
-        Functions\when('get_queried_object')->justReturn(null);
+		$GLOBALS['wp'] = (object) array( 'query_vars' => array( 'md' => '' ) );
 
-        $router->maybeRespond();
+		Functions\when( 'is_singular' )->justReturn( true );
+		// e.g. a term/user archive object, or null — anything that is not WP_Post.
+		Functions\when( 'get_queried_object' )->justReturn( null );
 
-        self::assertNull($handler->handledPost);
-    }
+		$router->maybeRespond();
 
-    public function test_register_hooks_into_init_and_template_redirect(): void
-    {
-        Functions\expect('add_action')->twice();
+		self::assertNull( $handler->handledPost );
+	}
 
-        $router = new EndpointRouter($this->fakeHandler());
+	public function test_register_hooks_into_init_and_template_redirect(): void {
+		Functions\expect( 'add_action' )->twice();
 
-        $router->register();
-    }
+		$router = new EndpointRouter( $this->fakeHandler() );
 
-    public function test_register_init_callback_declares_rewrite_endpoint(): void
-    {
-        if (!defined('EP_PERMALINK')) {
-            define('EP_PERMALINK', 1024);
-        }
+		$router->register();
+	}
 
-        $initCallback = null;
-        Functions\when('add_action')->alias(
-            static function (string $hook, callable $callback) use (&$initCallback): void {
-                if ($hook === 'init') {
-                    $initCallback = $callback;
-                }
-            }
-        );
+	public function test_register_init_callback_declares_rewrite_endpoint(): void {
+		if ( ! defined( 'EP_PERMALINK' ) ) {
+			define( 'EP_PERMALINK', 1024 );
+		}
 
-        $router = new EndpointRouter($this->fakeHandler());
-        $router->register();
+		$initCallback = null;
+		Functions\when( 'add_action' )->alias(
+			static function ( string $hook, callable $callback ) use ( &$initCallback ): void {
+				if ( 'init' === $hook ) {
+					$initCallback = $callback;
+				}
+			}
+		);
 
-        self::assertIsCallable($initCallback);
+		$router = new EndpointRouter( $this->fakeHandler() );
+		$router->register();
 
-        // Invoke the captured init callback and assert it registers the endpoint.
-        $registered = null;
-        Functions\when('add_rewrite_endpoint')->alias(
-            static function (string $name, int $places) use (&$registered): void {
-                $registered = [$name, $places];
-            }
-        );
+		self::assertIsCallable( $initCallback );
 
-        $initCallback();
+		// Invoke the captured init callback and assert it registers the endpoint.
+		$registered = null;
+		Functions\when( 'add_rewrite_endpoint' )->alias(
+			static function ( string $name, int $places ) use ( &$registered ): void {
+				$registered = array( $name, $places );
+			}
+		);
 
-        self::assertSame(['md', EP_PERMALINK], $registered);
-    }
+		$initCallback();
 
-    /**
-     * @return MarkdownRequestHandlerInterface&object{handledPost: ?\WP_Post}
-     */
-    private function fakeHandler(): MarkdownRequestHandlerInterface
-    {
-        return new class implements MarkdownRequestHandlerInterface {
-            public ?\WP_Post $handledPost = null;
+		self::assertSame( array( 'md', EP_PERMALINK ), $registered );
+	}
 
-            public function handle(\WP_Post $post): void
-            {
-                $this->handledPost = $post;
-            }
-        };
-    }
+	/**
+	 * @return MarkdownRequestHandlerInterface&object{handledPost: ?\WP_Post}
+	 */
+	private function fakeHandler(): MarkdownRequestHandlerInterface {
+		return new class() implements MarkdownRequestHandlerInterface {
+			public ?\WP_Post $handledPost = null;
+
+			public function handle( \WP_Post $post ): void {
+				$this->handledPost = $post;
+			}
+		};
+	}
 }

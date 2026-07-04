@@ -12,39 +12,38 @@ use Markout\Support\PostMetaExtractorInterface;
  * response-building logic stays unit-testable without terminating the
  * process.
  */
-final class MarkdownRequestHandler implements MarkdownRequestHandlerInterface
-{
-    public function __construct(
-        private readonly MarkdownRespondingInterface $responder,
-        private readonly PostMetaExtractorInterface $metaExtractor
-    ) {
-    }
+final class MarkdownRequestHandler implements MarkdownRequestHandlerInterface {
 
-    public function handle(\WP_Post $post): void
-    {
-        $response = $this->responder->respond($post, $this->metaExtractor->extract($post));
+	public function __construct(
+		private readonly MarkdownRespondingInterface $responder,
+		private readonly PostMetaExtractorInterface $metaExtractor
+	) {
+	}
 
-        $this->emit($response);
-    }
+	public function handle( \WP_Post $post ): void {
+		$response = $this->responder->respond( $post, $this->metaExtractor->extract( $post ) );
 
-    private function emit(Response $response): void
-    {
-        if (!headers_sent()) {
-            // Clear any output buffers upstream code may have started,
-            // otherwise buffered output would be flushed before our own
-            // headers/body, corrupting the response.
-            while (ob_get_level() > 0) {
-                ob_end_clean();
-            }
+		$this->emit( $response );
+	}
 
-            // nocache_headers() ensures a page cache or CDN never stores a
-            // password-denied (403) response under the /md URL.
-            nocache_headers();
-            status_header($response->status);
-            header('Content-Type: ' . $response->contentType);
-        }
+	private function emit( Response $response ): void {
+		if ( ! headers_sent() ) {
+			// Clear any output buffers upstream code may have started,
+			// otherwise buffered output would be flushed before our own
+			// headers/body, corrupting the response.
+			while ( ob_get_level() > 0 ) {
+				ob_end_clean();
+			}
 
-        echo $response->body;
-        exit;
-    }
+			// nocache_headers() ensures a page cache or CDN never stores a
+			// password-denied (403) response under the /md URL.
+			nocache_headers();
+			status_header( $response->status );
+			header( 'Content-Type: ' . $response->contentType );
+		}
+
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- this is a text/markdown or text/plain API response body, not HTML; esc_html() would corrupt the markdown content itself.
+		echo $response->body;
+		exit;
+	}
 }

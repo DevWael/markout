@@ -11,82 +11,77 @@ use Markout\Support\PostMetaExtractorInterface;
 use Markout\Support\PostVisibility;
 use PHPUnit\Framework\TestCase;
 
-final class PostCacherTest extends TestCase
-{
-    private function fakeCache(): CacheInterface
-    {
-        return new class implements CacheInterface {
-            public array $writes = [];
-            public array $deletes = [];
+final class PostCacherTest extends TestCase {
 
-            public function get(int $postId): ?string
-            {
-                return null;
-            }
+	private function fakeCache(): CacheInterface {
+		return new class() implements CacheInterface {
+			public array $writes  = array();
+			public array $deletes = array();
 
-            public function write(int $postId, string $content): bool
-            {
-                $this->writes[] = [$postId, $content];
+			public function get( int $postId ): ?string {
+				return null;
+			}
 
-                return true;
-            }
+			public function write( int $postId, string $content ): bool {
+				$this->writes[] = array( $postId, $content );
 
-            public function delete(int $postId): bool
-            {
-                $this->deletes[] = $postId;
+				return true;
+			}
 
-                return true;
-            }
-        };
-    }
+			public function delete( int $postId ): bool {
+				$this->deletes[] = $postId;
 
-    private function fakeGenerator(): MarkdownGeneratorInterface
-    {
-        return new class implements MarkdownGeneratorInterface {
-            public function generate(\WP_Post $post, array $meta): string
-            {
-                return 'md-' . $post->ID;
-            }
-        };
-    }
+				return true;
+			}
+		};
+	}
 
-    private function fakeMetaExtractor(): PostMetaExtractorInterface
-    {
-        return new class implements PostMetaExtractorInterface {
-            public function extract(\WP_Post $post): array
-            {
-                return ['title' => '', 'date' => '', 'author' => '', 'permalink' => ''];
-            }
-        };
-    }
+	private function fakeGenerator(): MarkdownGeneratorInterface {
+		return new class() implements MarkdownGeneratorInterface {
+			public function generate( \WP_Post $post, array $meta ): string {
+				return 'md-' . $post->ID;
+			}
+		};
+	}
 
-    public function test_sync_writes_generated_markdown_for_public_post(): void
-    {
-        $cache = $this->fakeCache();
-        $cacher = new PostCacher($cache, $this->fakeGenerator(), $this->fakeMetaExtractor(), new PostVisibility());
+	private function fakeMetaExtractor(): PostMetaExtractorInterface {
+		return new class() implements PostMetaExtractorInterface {
+			public function extract( \WP_Post $post ): array {
+				return array(
+					'title'     => '',
+					'date'      => '',
+					'author'    => '',
+					'permalink' => '',
+				);
+			}
+		};
+	}
 
-        $post = new \WP_Post();
-        $post->ID = 5;
-        $post->post_password = '';
+	public function test_sync_writes_generated_markdown_for_public_post(): void {
+		$cache  = $this->fakeCache();
+		$cacher = new PostCacher( $cache, $this->fakeGenerator(), $this->fakeMetaExtractor(), new PostVisibility() );
 
-        $cacher->sync($post);
+		$post                = new \WP_Post();
+		$post->ID            = 5;
+		$post->post_password = '';
 
-        self::assertSame([[5, 'md-5']], $cache->writes);
-        self::assertSame([], $cache->deletes);
-    }
+		$cacher->sync( $post );
 
-    public function test_sync_deletes_cache_for_password_protected_post(): void
-    {
-        $cache = $this->fakeCache();
-        $cacher = new PostCacher($cache, $this->fakeGenerator(), $this->fakeMetaExtractor(), new PostVisibility());
+		self::assertSame( array( array( 5, 'md-5' ) ), $cache->writes );
+		self::assertSame( array(), $cache->deletes );
+	}
 
-        $post = new \WP_Post();
-        $post->ID = 5;
-        $post->post_password = 'secret';
+	public function test_sync_deletes_cache_for_password_protected_post(): void {
+		$cache  = $this->fakeCache();
+		$cacher = new PostCacher( $cache, $this->fakeGenerator(), $this->fakeMetaExtractor(), new PostVisibility() );
 
-        $cacher->sync($post);
+		$post                = new \WP_Post();
+		$post->ID            = 5;
+		$post->post_password = 'secret';
 
-        self::assertSame([], $cache->writes);
-        self::assertSame([5], $cache->deletes);
-    }
+		$cacher->sync( $post );
+
+		self::assertSame( array(), $cache->writes );
+		self::assertSame( array( 5 ), $cache->deletes );
+	}
 }

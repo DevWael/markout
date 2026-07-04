@@ -12,58 +12,57 @@ use Markout\Http\MarkdownRequestHandlerInterface;
  * mirrors WordPress's own content-visibility rules without any additional
  * capability checks layered on top.
  */
-final class EndpointRouter implements RouterInterface
-{
-    private const ENDPOINT = 'md';
-    private const ALLOWED_TYPES = ['post', 'page'];
+final class EndpointRouter implements RouterInterface {
 
-    public function __construct(private readonly MarkdownRequestHandlerInterface $handler)
-    {
-    }
+	private const ENDPOINT      = 'md';
+	private const ALLOWED_TYPES = array( 'post', 'page' );
 
-    public function register(): void
-    {
-        add_action('init', static function (): void {
-            add_rewrite_endpoint(self::ENDPOINT, EP_PERMALINK);
-        });
-        add_action('template_redirect', [$this, 'maybeRespond']);
-    }
+	public function __construct( private readonly MarkdownRequestHandlerInterface $handler ) {
+	}
 
-    public function maybeRespond(): void
-    {
-        // $GLOBALS['wp'] is expected to be the global WP_Query request object
-        // by the time template_redirect fires, but is guarded defensively
-        // (missing/non-object/no query_vars) rather than assumed, since this
-        // hook can also run in contexts (e.g. some test harnesses or edge-case
-        // early bootstraps) where WordPress hasn't populated it yet.
-        $wp = $GLOBALS['wp'] ?? null;
-        $queryVars = is_object($wp) && isset($wp->query_vars) ? (array) $wp->query_vars : [];
+	public function register(): void {
+		add_action(
+			'init',
+			static function (): void {
+				add_rewrite_endpoint( self::ENDPOINT, EP_PERMALINK );
+			}
+		);
+		add_action( 'template_redirect', array( $this, 'maybeRespond' ) );
+	}
 
-        if (!$this->isMarkdownRequest($queryVars)) {
-            return;
-        }
+	public function maybeRespond(): void {
+		// $GLOBALS['wp'] is expected to be the global WP_Query request object
+		// by the time template_redirect fires, but is guarded defensively
+		// (missing/non-object/no query_vars) rather than assumed, since this
+		// hook can also run in contexts (e.g. some test harnesses or edge-case
+		// early bootstraps) where WordPress hasn't populated it yet.
+		$wp        = $GLOBALS['wp'] ?? null;
+		$queryVars = is_object( $wp ) && isset( $wp->query_vars ) ? (array) $wp->query_vars : array();
 
-        if (!is_singular(self::ALLOWED_TYPES)) {
-            return;
-        }
+		if ( ! $this->isMarkdownRequest( $queryVars ) ) {
+			return;
+		}
 
-        $post = get_queried_object();
-        if (!($post instanceof \WP_Post)) {
-            return;
-        }
+		if ( ! is_singular( self::ALLOWED_TYPES ) ) {
+			return;
+		}
 
-        $this->handler->handle($post);
-    }
+		$post = get_queried_object();
+		if ( ! ( $post instanceof \WP_Post ) ) {
+			return;
+		}
 
-    /**
-     * @param array<string, mixed> $queryVars
-     */
-    public function isMarkdownRequest(array $queryVars): bool
-    {
-        // Endpoint query vars default to '' whether the endpoint is
-        // present-with-no-value or entirely absent, so get_query_var()
-        // can't distinguish the two cases — key presence is the only
-        // reliable signal that /md was actually requested.
-        return array_key_exists(self::ENDPOINT, $queryVars);
-    }
+		$this->handler->handle( $post );
+	}
+
+	/**
+	 * @param array<string, mixed> $queryVars
+	 */
+	public function isMarkdownRequest( array $queryVars ): bool {
+		// Endpoint query vars default to '' whether the endpoint is
+		// present-with-no-value or entirely absent, so get_query_var()
+		// can't distinguish the two cases — key presence is the only
+		// reliable signal that /md was actually requested.
+		return array_key_exists( self::ENDPOINT, $queryVars );
+	}
 }

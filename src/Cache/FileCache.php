@@ -8,96 +8,92 @@ namespace Markout\Cache;
  * Stores converted markdown as one file per post under a single
  * upload-relative directory; not database-backed by design.
  */
-final class FileCache implements CacheInterface
-{
-    private string $directory;
+final class FileCache implements CacheInterface {
 
-    public function __construct(string $directory)
-    {
-        $this->directory = rtrim($directory, '/');
-        $this->ensureDirectoryExists();
-    }
+	private string $directory;
 
-    public function get(int $postId): ?string
-    {
-        $path = $this->path($postId);
-        if (!is_file($path)) {
-            return null;
-        }
+	public function __construct( string $directory ) {
+		$this->directory = rtrim( $directory, '/' );
+		$this->ensureDirectoryExists();
+	}
 
-        $contents = file_get_contents($path);
+	public function get( int $postId ): ?string {
+		$path = $this->path( $postId );
+		if ( ! is_file( $path ) ) {
+			return null;
+		}
 
-        return $contents === false ? null : $contents;
-    }
+		$contents = file_get_contents( $path );
 
-    public function write(int $postId, string $content): bool
-    {
-        $this->ensureDirectoryExists();
+		return false === $contents ? null : $contents;
+	}
 
-        if (!is_dir($this->directory)) {
-            $this->logFailure('Cache directory is not writable: ' . $this->directory);
+	public function write( int $postId, string $content ): bool {
+		$this->ensureDirectoryExists();
 
-            return false;
-        }
+		if ( ! is_dir( $this->directory ) ) {
+			$this->logFailure( 'Cache directory is not writable: ' . $this->directory );
 
-        // Written to a uniquely-named temp file first, then moved into place
-        // with rename() (atomic on the same filesystem), so a concurrent
-        // reader hitting a cache miss can never observe a partially-written
-        // file while an async regeneration job is mid-write.
-        $path = $this->path($postId);
-        $tempPath = $path . '.' . uniqid('tmp', true);
+			return false;
+		}
 
-        if (file_put_contents($tempPath, $content, LOCK_EX) === false) {
-            $this->logFailure('Failed to write temporary cache file: ' . $tempPath);
+		// Written to a uniquely-named temp file first, then moved into place
+		// with rename() (atomic on the same filesystem), so a concurrent
+		// reader hitting a cache miss can never observe a partially-written
+		// file while an async regeneration job is mid-write.
+		$path     = $this->path( $postId );
+		$tempPath = $path . '.' . uniqid( 'tmp', true );
 
-            return false;
-        }
+		if ( file_put_contents( $tempPath, $content, LOCK_EX ) === false ) {
+			$this->logFailure( 'Failed to write temporary cache file: ' . $tempPath );
 
-        if (!rename($tempPath, $path)) {
-            $this->logFailure('Failed to move temporary cache file into place: ' . $path);
-            @unlink($tempPath);
+			return false;
+		}
 
-            return false;
-        }
+		if ( ! rename( $tempPath, $path ) ) {
+			$this->logFailure( 'Failed to move temporary cache file into place: ' . $path );
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort cleanup; write() has already failed and returns false either way.
+			@unlink( $tempPath );
 
-        return true;
-    }
+			return false;
+		}
 
-    public function delete(int $postId): bool
-    {
-        $path = $this->path($postId);
-        if (!is_file($path)) {
-            return true;
-        }
+		return true;
+	}
 
-        return unlink($path);
-    }
+	public function delete( int $postId ): bool {
+		$path = $this->path( $postId );
+		if ( ! is_file( $path ) ) {
+			return true;
+		}
 
-    private function path(int $postId): string
-    {
-        return sprintf('%s/%d.md', $this->directory, $postId);
-    }
+		return unlink( $path );
+	}
 
-    private function ensureDirectoryExists(): void
-    {
-        if (!is_dir($this->directory)) {
-            @mkdir($this->directory, 0755, true);
-        }
+	private function path( int $postId ): string {
+		return sprintf( '%s/%d.md', $this->directory, $postId );
+	}
 
-        if (!is_dir($this->directory)) {
-            return;
-        }
+	private function ensureDirectoryExists(): void {
+		if ( ! is_dir( $this->directory ) ) {
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- the is_dir() check below handles failure gracefully; the warning would only be suppressed noise on a race or permissions issue we already recover from.
+			@mkdir( $this->directory, 0755, true );
+		}
 
-        $index = $this->directory . '/index.php';
-        if (!is_file($index)) {
-            file_put_contents($index, "<?php\n// Silence is golden.\n");
-        }
-    }
+		if ( ! is_dir( $this->directory ) ) {
+			return;
+		}
 
-    private function logFailure(string $message): void
-    {
-        if (defined('WP_DEBUG') && WP_DEBUG) {
-            error_log('Markout: ' . $message);
-        }
-    }
+		$index = $this->directory . '/index.php';
+		if ( ! is_file( $index ) ) {
+			file_put_contents( $index, "<?php\n// Silence is golden.\n" );
+		}
+	}
+
+	private function logFailure( string $message ): void {
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- gated behind WP_DEBUG, not left in a hot path.
+			error_log( 'Markout: ' . $message );
+		}
+	}
 }

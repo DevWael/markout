@@ -6,10 +6,9 @@ namespace Markout\Tests\Unit;
 
 use Markout\Tests\TestCase;
 
-final class SmokeTest extends TestCase
-{
-    public function test_test_harness_boots(): void
-    {
-        self::assertTrue(true);
-    }
+final class SmokeTest extends TestCase {
+
+	public function test_test_harness_boots(): void {
+		self::assertTrue( true );
+	}
 }

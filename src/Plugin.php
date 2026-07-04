@@ -21,87 +21,82 @@ use Markout\Support\PostVisibility;
  * Composition root: wires the plugin's collaborators and drives the
  * WordPress activation/deactivation/boot lifecycle.
  */
-final class Plugin
-{
-    private const BACKFILL_SCHEDULED_OPTION = 'markout_backfill_scheduled';
+final class Plugin {
 
-    private readonly EndpointRouter $router;
-    private readonly ActionSchedulerRegenerator $regenerator;
-    private readonly BackfillScheduler $backfill;
+	private const BACKFILL_SCHEDULED_OPTION = 'markout_backfill_scheduled';
 
-    public function __construct(string $cacheDirectory)
-    {
-        $cache = new FileCache($cacheDirectory);
-        $visibility = new PostVisibility();
-        $metaExtractor = new PostMetaExtractor();
+	private readonly EndpointRouter $router;
+	private readonly ActionSchedulerRegenerator $regenerator;
+	private readonly BackfillScheduler $backfill;
 
-        $responder = new MarkdownResponder(
-            $cache,
-            new HtmlToMarkdownConverter(),
-            new FrontmatterBuilder(),
-            $visibility
-        );
+	public function __construct( string $cacheDirectory ) {
+		$cache         = new FileCache( $cacheDirectory );
+		$visibility    = new PostVisibility();
+		$metaExtractor = new PostMetaExtractor();
 
-        $cacher = new PostCacher($cache, $responder, $metaExtractor, $visibility);
-        $requestHandler = new MarkdownRequestHandler($responder, $metaExtractor);
+		$responder = new MarkdownResponder(
+			$cache,
+			new HtmlToMarkdownConverter(),
+			new FrontmatterBuilder(),
+			$visibility
+		);
 
-        $this->router = new EndpointRouter($requestHandler);
-        $this->regenerator = new ActionSchedulerRegenerator($cache, $visibility, $cacher);
-        $this->backfill = new BackfillScheduler(new WPQueryPostFinder(), $cacher);
-    }
+		$cacher         = new PostCacher( $cache, $responder, $metaExtractor, $visibility );
+		$requestHandler = new MarkdownRequestHandler( $responder, $metaExtractor );
 
-    public function boot(): void
-    {
-        $this->router->register();
-        $this->regenerator->register();
-        $this->backfill->register();
-        $this->maybeScheduleBackfill();
-    }
+		$this->router      = new EndpointRouter( $requestHandler );
+		$this->regenerator = new ActionSchedulerRegenerator( $cache, $visibility, $cacher );
+		$this->backfill    = new BackfillScheduler( new WPQueryPostFinder(), $cacher );
+	}
 
-    // Runs on every `plugins_loaded` rather than in activate(): Action
-    // Scheduler's own data store may not have finished migrating yet at
-    // activation time on a brand-new install, so scheduling here instead
-    // doubles as the "did activation actually take" self-check.
-    //
-    // add_option() is used as an atomic insert-if-absent guard rather than
-    // a get_option()-then-update_option() pair: the latter is a
-    // check-then-act race that lets two near-simultaneous requests both
-    // pass the check and each enqueue an overlapping backfill chain.
-    // add_option() can only succeed once for a given option name, so at
-    // most one request ever wins the race and schedules the backfill.
-    private function maybeScheduleBackfill(): void
-    {
-        if (!function_exists('as_schedule_single_action')) {
-            return;
-        }
+	public function boot(): void {
+		$this->router->register();
+		$this->regenerator->register();
+		$this->backfill->register();
+		$this->maybeScheduleBackfill();
+	}
 
-        if (!add_option(self::BACKFILL_SCHEDULED_OPTION, true, '', false)) {
-            return;
-        }
+	// Runs on every `plugins_loaded` rather than in activate(): Action
+	// Scheduler's own data store may not have finished migrating yet at
+	// activation time on a brand-new install, so scheduling here instead
+	// doubles as the "did activation actually take" self-check.
+	//
+	// add_option() is used as an atomic insert-if-absent guard rather than
+	// a get_option()-then-update_option() pair: the latter is a
+	// check-then-act race that lets two near-simultaneous requests both
+	// pass the check and each enqueue an overlapping backfill chain.
+	// add_option() can only succeed once for a given option name, so at
+	// most one request ever wins the race and schedules the backfill.
+	private function maybeScheduleBackfill(): void {
+		if ( ! function_exists( 'as_schedule_single_action' ) ) {
+			return;
+		}
 
-        as_schedule_single_action(time(), BackfillScheduler::HOOK, [0], 'markout');
-    }
+		if ( ! add_option( self::BACKFILL_SCHEDULED_OPTION, true, '', false ) ) {
+			return;
+		}
 
-    public static function activate(): void
-    {
-        flush_rewrite_rules();
-    }
+		as_schedule_single_action( time(), BackfillScheduler::HOOK, array( 0 ), 'markout' );
+	}
 
-    public static function deactivate(): void
-    {
-        flush_rewrite_rules();
+	public static function activate(): void {
+		flush_rewrite_rules();
+	}
 
-        delete_option(self::BACKFILL_SCHEDULED_OPTION);
+	public static function deactivate(): void {
+		flush_rewrite_rules();
 
-        if (!function_exists('as_unschedule_all_actions')) {
-            return;
-        }
+		delete_option( self::BACKFILL_SCHEDULED_OPTION );
 
-        // Args MUST be null (wildcard: match any args), not [] here. Passing
-        // [] is an exact-match filter for actions scheduled with literally no
-        // args, so it would never match this plugin's actions (always
-        // scheduled with [$postId] or [$offset]) and the cleanup would no-op.
-        as_unschedule_all_actions(ActionSchedulerRegenerator::REGENERATE_HOOK, null, 'markout');
-        as_unschedule_all_actions(BackfillScheduler::HOOK, null, 'markout');
-    }
+		if ( ! function_exists( 'as_unschedule_all_actions' ) ) {
+			return;
+		}
+
+		// Args MUST be null (wildcard: match any args), not [] here. Passing
+		// [] is an exact-match filter for actions scheduled with literally no
+		// args, so it would never match this plugin's actions (always
+		// scheduled with [$postId] or [$offset]) and the cleanup would no-op.
+		as_unschedule_all_actions( ActionSchedulerRegenerator::REGENERATE_HOOK, null, 'markout' );
+		as_unschedule_all_actions( BackfillScheduler::HOOK, null, 'markout' );
+	}
 }

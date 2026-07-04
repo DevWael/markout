@@ -10,130 +10,118 @@ use Markout\Scheduler\PostCacherInterface;
 use Markout\Scheduler\PostFinderInterface;
 use Markout\Tests\TestCase;
 
-final class BackfillSchedulerTest extends TestCase
-{
-    /**
-     * @return PostCacherInterface&object{syncedPostIds: int[]}
-     */
-    private function fakeCacher(): PostCacherInterface
-    {
-        return new class implements PostCacherInterface {
-            public array $syncedPostIds = [];
+final class BackfillSchedulerTest extends TestCase {
 
-            public function sync(\WP_Post $post): void
-            {
-                $this->syncedPostIds[] = $post->ID;
-            }
-        };
-    }
+	/**
+	 * @return PostCacherInterface&object{syncedPostIds: int[]}
+	 */
+	private function fakeCacher(): PostCacherInterface {
+		return new class() implements PostCacherInterface {
+			public array $syncedPostIds = array();
 
-    private function finderReturning(array $posts): PostFinderInterface
-    {
-        return new class ($posts) implements PostFinderInterface {
-            public function __construct(private array $posts)
-            {
-            }
+			public function sync( \WP_Post $post ): void {
+				$this->syncedPostIds[] = $post->ID;
+			}
+		};
+	}
 
-            public function findPublished(array $postTypes, int $limit, int $offset): array
-            {
-                return $this->posts;
-            }
-        };
-    }
+	private function finderReturning( array $posts ): PostFinderInterface {
+		return new class($posts) implements PostFinderInterface {
+			public function __construct( private array $posts ) {
+			}
 
-    private function makePost(int $id): \WP_Post
-    {
-        $post = new \WP_Post();
-        $post->ID = $id;
+			public function findPublished( array $postTypes, int $limit, int $offset ): array {
+				return $this->posts;
+			}
+		};
+	}
 
-        return $post;
-    }
+	private function makePost( int $id ): \WP_Post {
+		$post     = new \WP_Post();
+		$post->ID = $id;
 
-    public function test_run_batch_syncs_every_post_found(): void
-    {
-        $posts = [$this->makePost(1), $this->makePost(2)];
-        $cacher = $this->fakeCacher();
+		return $post;
+	}
 
-        $scheduler = new BackfillScheduler($this->finderReturning($posts), $cacher);
+	public function test_run_batch_syncs_every_post_found(): void {
+		$posts  = array( $this->makePost( 1 ), $this->makePost( 2 ) );
+		$cacher = $this->fakeCacher();
 
-        $scheduler->runBatch(0);
+		$scheduler = new BackfillScheduler( $this->finderReturning( $posts ), $cacher );
 
-        self::assertSame([1, 2], $cacher->syncedPostIds);
-    }
+		$scheduler->runBatch( 0 );
 
-    public function test_run_batch_reschedules_when_batch_is_full(): void
-    {
-        $fullBatch = array_map(fn (int $i) => $this->makePost($i), range(1, 20));
+		self::assertSame( array( 1, 2 ), $cacher->syncedPostIds );
+	}
 
-        Functions\when('as_has_scheduled_action')->justReturn(false);
-        Functions\expect('as_schedule_single_action')
-            ->once()
-            ->with(\Mockery::type('int'), BackfillScheduler::HOOK, [20], 'markout');
+	public function test_run_batch_reschedules_when_batch_is_full(): void {
+		$fullBatch = array_map( fn ( int $i ) => $this->makePost( $i ), range( 1, 20 ) );
 
-        $scheduler = new BackfillScheduler($this->finderReturning($fullBatch), $this->fakeCacher());
+		Functions\when( 'as_has_scheduled_action' )->justReturn( false );
+		Functions\expect( 'as_schedule_single_action' )
+			->once()
+			->with( \Mockery::type( 'int' ), BackfillScheduler::HOOK, array( 20 ), 'markout' );
 
-        $scheduler->runBatch(0);
-    }
+		$scheduler = new BackfillScheduler( $this->finderReturning( $fullBatch ), $this->fakeCacher() );
 
-    public function test_run_batch_does_not_reschedule_when_already_scheduled(): void
-    {
-        $fullBatch = array_map(fn (int $i) => $this->makePost($i), range(1, 20));
+		$scheduler->runBatch( 0 );
+	}
 
-        Functions\when('as_has_scheduled_action')->justReturn(true);
-        Functions\expect('as_schedule_single_action')->never();
+	public function test_run_batch_does_not_reschedule_when_already_scheduled(): void {
+		$fullBatch = array_map( fn ( int $i ) => $this->makePost( $i ), range( 1, 20 ) );
 
-        $scheduler = new BackfillScheduler($this->finderReturning($fullBatch), $this->fakeCacher());
+		Functions\when( 'as_has_scheduled_action' )->justReturn( true );
+		Functions\expect( 'as_schedule_single_action' )->never();
 
-        $scheduler->runBatch(0);
-    }
+		$scheduler = new BackfillScheduler( $this->finderReturning( $fullBatch ), $this->fakeCacher() );
 
-    public function test_run_batch_does_not_reschedule_when_batch_is_partial(): void
-    {
-        Functions\expect('as_schedule_single_action')->never();
+		$scheduler->runBatch( 0 );
+	}
 
-        $scheduler = new BackfillScheduler($this->finderReturning([$this->makePost(1)]), $this->fakeCacher());
+	public function test_run_batch_does_not_reschedule_when_batch_is_partial(): void {
+		Functions\expect( 'as_schedule_single_action' )->never();
 
-        $scheduler->runBatch(0);
-    }
+		$scheduler = new BackfillScheduler( $this->finderReturning( array( $this->makePost( 1 ) ) ), $this->fakeCacher() );
 
-    public function test_run_batch_schedules_next_offset_when_batch_is_full(): void
-    {
-        $fullBatch = array_map(fn (int $i) => $this->makePost($i), range(1, 20));
+		$scheduler->runBatch( 0 );
+	}
 
-        Functions\when('as_has_scheduled_action')->justReturn(false);
+	public function test_run_batch_schedules_next_offset_when_batch_is_full(): void {
+		$fullBatch = array_map( fn ( int $i ) => $this->makePost( $i ), range( 1, 20 ) );
 
-        $scheduled = null;
-        Functions\when('as_schedule_single_action')->alias(
-            static function (int $timestamp, string $hook, array $args, string $group) use (&$scheduled): void {
-                $scheduled = [$hook, $args, $group];
-            }
-        );
+		Functions\when( 'as_has_scheduled_action' )->justReturn( false );
 
-        $scheduler = new BackfillScheduler($this->finderReturning($fullBatch), $this->fakeCacher());
+		$scheduled = null;
+		Functions\when( 'as_schedule_single_action' )->alias(
+			static function ( int $timestamp, string $hook, array $args, string $group ) use ( &$scheduled ): void {
+				$scheduled = array( $hook, $args, $group );
+			}
+		);
 
-        $scheduler->runBatch(40);
+		$scheduler = new BackfillScheduler( $this->finderReturning( $fullBatch ), $this->fakeCacher() );
 
-        // Offset 40 + batch of 20 should schedule the next batch at offset 60.
-        self::assertSame([BackfillScheduler::HOOK, [60], 'markout'], $scheduled);
-    }
+		$scheduler->runBatch( 40 );
 
-    public function test_run_batch_skips_scheduling_when_next_batch_already_queued(): void
-    {
-        $fullBatch = array_map(fn (int $i) => $this->makePost($i), range(1, 20));
+		// Offset 40 + batch of 20 should schedule the next batch at offset 60.
+		self::assertSame( array( BackfillScheduler::HOOK, array( 60 ), 'markout' ), $scheduled );
+	}
 
-        Functions\when('as_has_scheduled_action')->justReturn(true);
+	public function test_run_batch_skips_scheduling_when_next_batch_already_queued(): void {
+		$fullBatch = array_map( fn ( int $i ) => $this->makePost( $i ), range( 1, 20 ) );
 
-        $scheduledCalls = 0;
-        Functions\when('as_schedule_single_action')->alias(
-            static function () use (&$scheduledCalls): void {
-                $scheduledCalls++;
-            }
-        );
+		Functions\when( 'as_has_scheduled_action' )->justReturn( true );
 
-        $scheduler = new BackfillScheduler($this->finderReturning($fullBatch), $this->fakeCacher());
+		$scheduledCalls = 0;
+		Functions\when( 'as_schedule_single_action' )->alias(
+			static function () use ( &$scheduledCalls ): void {
+				$scheduledCalls++;
+			}
+		);
 
-        $scheduler->runBatch(0);
+		$scheduler = new BackfillScheduler( $this->finderReturning( $fullBatch ), $this->fakeCacher() );
 
-        self::assertSame(0, $scheduledCalls, 'Should not double-schedule an already-queued batch.');
-    }
+		$scheduler->runBatch( 0 );
+
+		self::assertSame( 0, $scheduledCalls, 'Should not double-schedule an already-queued batch.' );
+	}
 }

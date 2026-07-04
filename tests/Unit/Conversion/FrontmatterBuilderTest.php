@@ -7,99 +7,105 @@ namespace Markout\Tests\Unit\Conversion;
 use Markout\Conversion\FrontmatterBuilder;
 use PHPUnit\Framework\TestCase;
 
-final class FrontmatterBuilderTest extends TestCase
-{
-    public function test_build_produces_yaml_block(): void
-    {
-        $builder = new FrontmatterBuilder();
+final class FrontmatterBuilderTest extends TestCase {
 
-        $result = $builder->build([
-            'title' => 'Hello World',
-            'date' => '2026-07-04T00:00:00+00:00',
-            'author' => 'Ahmad',
-            'permalink' => 'https://example.com/hello-world/',
-        ]);
+	public function test_build_produces_yaml_block(): void {
+		$builder = new FrontmatterBuilder();
 
-        self::assertSame(
-            "---\n"
-            . "title: \"Hello World\"\n"
-            . "date: \"2026-07-04T00:00:00+00:00\"\n"
-            . "author: \"Ahmad\"\n"
-            . "permalink: \"https://example.com/hello-world/\"\n"
-            . "---\n\n",
-            $result
-        );
-    }
+		$result = $builder->build(
+			array(
+				'title'     => 'Hello World',
+				'date'      => '2026-07-04T00:00:00+00:00',
+				'author'    => 'Ahmad',
+				'permalink' => 'https://example.com/hello-world/',
+			)
+		);
 
-    public function test_build_escapes_double_quotes_in_values(): void
-    {
-        $builder = new FrontmatterBuilder();
+		self::assertSame(
+			"---\n"
+			. "title: \"Hello World\"\n"
+			. "date: \"2026-07-04T00:00:00+00:00\"\n"
+			. "author: \"Ahmad\"\n"
+			. "permalink: \"https://example.com/hello-world/\"\n"
+			. "---\n\n",
+			$result
+		);
+	}
 
-        $result = $builder->build([
-            'title' => 'He said "hi"',
-            'date' => '2026-07-04T00:00:00+00:00',
-            'author' => 'Ahmad',
-            'permalink' => 'https://example.com/x/',
-        ]);
+	public function test_build_escapes_double_quotes_in_values(): void {
+		$builder = new FrontmatterBuilder();
 
-        self::assertStringContainsString('title: "He said \\"hi\\""', $result);
-    }
+		$result = $builder->build(
+			array(
+				'title'     => 'He said "hi"',
+				'date'      => '2026-07-04T00:00:00+00:00',
+				'author'    => 'Ahmad',
+				'permalink' => 'https://example.com/x/',
+			)
+		);
 
-    public function test_build_escapes_backslashes_in_values(): void
-    {
-        $builder = new FrontmatterBuilder();
+		self::assertStringContainsString( 'title: "He said \\"hi\\""', $result );
+	}
 
-        $result = $builder->build([
-            'title' => 'C:\\Users\\test',
-            'date' => '2026-07-04T00:00:00+00:00',
-            'author' => 'Ahmad',
-            'permalink' => 'https://example.com/x/',
-        ]);
+	public function test_build_escapes_backslashes_in_values(): void {
+		$builder = new FrontmatterBuilder();
 
-        self::assertStringContainsString('title: "C:\\\\Users\\\\test"', $result);
-    }
+		$result = $builder->build(
+			array(
+				'title'     => 'C:\\Users\\test',
+				'date'      => '2026-07-04T00:00:00+00:00',
+				'author'    => 'Ahmad',
+				'permalink' => 'https://example.com/x/',
+			)
+		);
 
-    public function test_build_renders_empty_value_as_empty_quoted_string(): void
-    {
-        $builder = new FrontmatterBuilder();
+		self::assertStringContainsString( 'title: "C:\\\\Users\\\\test"', $result );
+	}
 
-        $result = $builder->build([
-            'title' => '',
-            'date' => '2026-07-04T00:00:00+00:00',
-            'author' => 'Ahmad',
-            'permalink' => 'https://example.com/x/',
-        ]);
+	public function test_build_renders_empty_value_as_empty_quoted_string(): void {
+		$builder = new FrontmatterBuilder();
 
-        self::assertStringContainsString("title: \"\"\n", $result);
-    }
+		$result = $builder->build(
+			array(
+				'title'     => '',
+				'date'      => '2026-07-04T00:00:00+00:00',
+				'author'    => 'Ahmad',
+				'permalink' => 'https://example.com/x/',
+			)
+		);
 
-    public function test_build_escapes_a_value_consisting_only_of_backslashes(): void
-    {
-        $builder = new FrontmatterBuilder();
+		self::assertStringContainsString( "title: \"\"\n", $result );
+	}
 
-        $result = $builder->build([
-            'title' => '\\\\\\',
-            'date' => '2026-07-04T00:00:00+00:00',
-            'author' => 'Ahmad',
-            'permalink' => 'https://example.com/x/',
-        ]);
+	public function test_build_escapes_a_value_consisting_only_of_backslashes(): void {
+		$builder = new FrontmatterBuilder();
 
-        // Three backslashes must each double to six.
-        self::assertStringContainsString('title: "\\\\\\\\\\\\"', $result);
-    }
+		$result = $builder->build(
+			array(
+				'title'     => '\\\\\\',
+				'date'      => '2026-07-04T00:00:00+00:00',
+				'author'    => 'Ahmad',
+				'permalink' => 'https://example.com/x/',
+			)
+		);
 
-    public function test_build_escapes_a_value_consisting_only_of_quotes(): void
-    {
-        $builder = new FrontmatterBuilder();
+		// Three backslashes must each double to six.
+		self::assertStringContainsString( 'title: "\\\\\\\\\\\\"', $result );
+	}
 
-        $result = $builder->build([
-            'title' => '"""',
-            'date' => '2026-07-04T00:00:00+00:00',
-            'author' => 'Ahmad',
-            'permalink' => 'https://example.com/x/',
-        ]);
+	public function test_build_escapes_a_value_consisting_only_of_quotes(): void {
+		$builder = new FrontmatterBuilder();
 
-        // Each double quote must be backslash-escaped.
-        self::assertStringContainsString('title: "\\"\\"\\""', $result);
-    }
+		$result = $builder->build(
+			array(
+				'title'     => '"""',
+				'date'      => '2026-07-04T00:00:00+00:00',
+				'author'    => 'Ahmad',
+				'permalink' => 'https://example.com/x/',
+			)
+		);
+
+		// Each double quote must be backslash-escaped.
+		self::assertStringContainsString( 'title: "\\"\\"\\""', $result );
+	}
 }
