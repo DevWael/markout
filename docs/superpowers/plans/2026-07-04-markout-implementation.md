@@ -91,6 +91,8 @@ Expected: dependencies resolve, `vendor/` and `composer.lock` are created, no er
 
 - [ ] **Step 3: Create `phpcs.xml`**
 
+PSR-12's default method-naming sniff requires camelCase, which conflicts with PHPUnit's idiomatic `test_snake_case` naming used throughout this plan's test files. It's excluded for `tests/*` only — `src/` production code still enforces camelCase. `tests/bootstrap.php` is excluded entirely, since its global (non-namespaced) `WP_Post` stub class is inherently incompatible with PSR-12's namespacing requirement and isn't "our" code style surface.
+
 ```xml
 <?xml version="1.0"?>
 <ruleset name="Markout">
@@ -99,7 +101,11 @@ Expected: dependencies resolve, `vendor/` and `composer.lock` are created, no er
     <arg name="colors"/>
     <file>src</file>
     <file>tests</file>
+    <exclude-pattern>tests/bootstrap\.php$</exclude-pattern>
     <rule ref="PSR12"/>
+    <rule ref="PSR1.Methods.CamelCapsMethodName">
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
 </ruleset>
 ```
 
