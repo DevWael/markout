@@ -20,15 +20,27 @@ if (!defined('ABSPATH')) {
 
 define('MARKOUT_PLUGIN_FILE', __FILE__);
 
-// Loaded unhooked, not on 'init': the missing-Composer-dependencies notice
-// below is built (and its __() call resolved) before any WordPress action
-// fires, since that check runs at top-level file inclusion.
-load_plugin_textdomain('markout', false, dirname(plugin_basename(MARKOUT_PLUGIN_FILE)) . '/languages');
+// Not hosted on WordPress.org, so the core "just-in-time" translation
+// loader (automatic since WP 4.6) never discovers this plugin's own
+// languages/ directory — it only knows about wordpress.org's centralized
+// language packs. Hooked on 'init' per WP 6.7's requirement that
+// translations never load earlier than that.
+add_action('init', static function (): void {
+    load_plugin_textdomain('markout', false, dirname(plugin_basename(MARKOUT_PLUGIN_FILE)) . '/languages');
+});
 
-function markout_deactivate_with_notice(string $message): void
+/**
+ * @param \Closure(): string $messageProvider
+ */
+function markout_deactivate_with_notice(\Closure $messageProvider): void
 {
-    add_action('admin_notices', static function () use ($message): void {
-        printf('<div class="notice notice-error"><p>%s</p></div>', esc_html($message));
+    // The message is resolved inside the closure, at admin_notices time
+    // (well after 'init'), not eagerly at the call site — some call sites
+    // fire before 'init' even exists, and translating there would violate
+    // WP 6.7's "no translations before init" rule regardless of when
+    // load_plugin_textdomain() itself runs.
+    add_action('admin_notices', static function () use ($messageProvider): void {
+        printf('<div class="notice notice-error"><p>%s</p></div>', esc_html($messageProvider()));
     });
 
     add_action('admin_init', static function (): void {
@@ -44,9 +56,9 @@ function markout_deactivate_with_notice(string $message): void
 // without `composer install` must not fatal on every page load.
 $markoutAutoload = __DIR__ . '/vendor/autoload.php';
 if (!file_exists($markoutAutoload)) {
-    markout_deactivate_with_notice(
-        __('Markout: missing Composer dependencies. Run composer install in the plugin directory.', 'markout')
-    );
+    markout_deactivate_with_notice(static function (): string {
+        return __('Markout: missing Composer dependencies. Run composer install in the plugin directory.', 'markout');
+    });
 
     return;
 }
@@ -60,7 +72,9 @@ add_action('plugins_loaded', static function (): void {
     // Markout's cache regeneration and backfill both depend on it, so there
     // is no safe degraded mode to fall back to.
     if (!function_exists('as_enqueue_async_action')) {
-        markout_deactivate_with_notice(__('Markout: Action Scheduler is unavailable.', 'markout'));
+        markout_deactivate_with_notice(
+            static fn (): string => __('Markout: Action Scheduler is unavailable.', 'markout')
+        );
 
         return;
     }
