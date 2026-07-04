@@ -2722,7 +2722,13 @@ if (function_exists('as_unschedule_all_actions')) {
 
 - [ ] **Step 2: Static analysis and style**
 
-Add `uninstall.php` to `phpcs.xml`'s file list (alongside `markout.php`), then run:
+Add `uninstall.php` to `phpcs.xml`'s file list (alongside `markout.php`). It needs the same `PSR1.Files.SideEffects` exclusion `markout.php` needed in Task 13 — widen that rule's existing `exclude-pattern` to cover both files rather than adding a second `<rule>` block:
+
+```xml
+<rule ref="PSR1.Files.SideEffects">
+    <exclude-pattern>(markout|uninstall)\.php$</exclude-pattern>
+</rule>
+```
 
 Run: `composer stan && composer cs`
 Expected: no errors. (`uninstall.php` isn't under `phpstan.neon`'s `paths`, so it's checked by `phpcs` only — this matches its untestable, WP-lifecycle-only nature.)
