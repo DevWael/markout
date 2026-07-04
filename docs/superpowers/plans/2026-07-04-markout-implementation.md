@@ -10,7 +10,8 @@
 
 **Revision history:**
 - **v2** (after round-1 review): fixed a cache-security leak where password-protected posts were being cached in the public uploads directory; replaced bare `\Closure` collaborators with named interfaces; made cache writes atomic; made `uninstall.php`'s recursive delete symlink-safe; made missing-dependency handling actually auto-deactivate the plugin.
-- **v3** (after round-2 review, this version): **removed a `current_user_can('read_post', ...)` capability check that was itself a functional regression** — it broke `/md` access for every anonymous visitor on every public post, because WordPress's `read_post` meta capability resolves to the `read` primitive capability, which logged-out users never have, even for fully public content. The existing `is_singular()` gate (upstream, in `EndpointRouter`) plus `post_password_required()` (inside `MarkdownResponder`) already correctly mirror WordPress's own visibility rules, per the spec — no additional capability check was needed. Also: extracted a `PostCacher` to eliminate duplicated password-check-then-generate-then-write logic between `ActionSchedulerRegenerator` and `BackfillScheduler`; added a `MarkdownRespondingInterface` so `MarkdownRequestHandler` depends on an interface rather than a concrete class; moved backfill scheduling out of the activation hook (where Action Scheduler's data store may not have finished migrating yet on a brand-new install) into a persistent-flag-guarded check on every `plugins_loaded`, which also consolidates the spec's "activation self-check" behavior into one place; fixed `FrontmatterBuilder` to escape backslashes as well as quotes (otherwise a title containing a literal backslash produced invalid YAML).
+- **v4** (after round-3 review, this version): closed a non-atomic race in `Plugin::maybeScheduleBackfill()` — a `get_option()`-then-`update_option()` guard could let two near-simultaneous requests both schedule an overlapping backfill chain; replaced with a single atomic `add_option()` insert, which can only succeed once. Also added a `transition_post_status` hook to `ActionSchedulerRegenerator` as an authoritative fallback for purging the cache on unpublish/trash, since `save_post` is not guaranteed to fire on every status change on every WordPress version (this had been flagged as a manual-QA-only caveat twice before being fixed directly).
+- **v3** (after round-2 review): **removed a `current_user_can('read_post', ...)` capability check that was itself a functional regression** — it broke `/md` access for every anonymous visitor on every public post, because WordPress's `read_post` meta capability resolves to the `read` primitive capability, which logged-out users never have, even for fully public content. The existing `is_singular()` gate (upstream, in `EndpointRouter`) plus `post_password_required()` (inside `MarkdownResponder`) already correctly mirror WordPress's own visibility rules, per the spec — no additional capability check was needed. Also: extracted a `PostCacher` to eliminate duplicated password-check-then-generate-then-write logic between `ActionSchedulerRegenerator` and `BackfillScheduler`; added a `MarkdownRespondingInterface` so `MarkdownRequestHandler` depends on an interface rather than a concrete class; moved backfill scheduling out of the activation hook (where Action Scheduler's data store may not have finished migrating yet on a brand-new install) into a persistent-flag-guarded check on every `plugins_loaded`, which also consolidates the spec's "activation self-check" behavior into one place; fixed `FrontmatterBuilder` to escape backslashes as well as quotes (otherwise a title containing a literal backslash produced invalid YAML).
 
 ## Global Constraints
 
@@ -1763,6 +1764,8 @@ git commit -m "Add PostCacher to unify the cache-or-purge policy"
 
 `onSave`/`onDelete` decide *whether* to enqueue a regeneration or purge the cache immediately (status/type/revision checks); `handleRegenerate` re-validates the post is still eligible, then delegates the actual cache-or-purge work (including the password check) to `PostCacher::sync()`.
 
+A second hook, `transition_post_status`, is registered as an authoritative fallback for purging: `save_post` is not guaranteed to fire on every status change on every WordPress version (notably, `wp_trash_post()` has not always routed through `wp_insert_post()`/`save_post` in every core release). `transition_post_status` fires on every status change without exception, so `onTransition` re-applies the same "not publish → delete" rule `onSave` already applies, making cache purging on unpublish/trash reliable regardless of which path WordPress core took internally. Calling both hooks for the same event is harmless: `enqueue()` is deduped via `as_has_scheduled_action()`, and `CacheInterface::delete()` is idempotent.
+
 - [ ] **Step 1: Write the failing test**
 
 ```php
@@ -1906,6 +1909,56 @@ final class ActionSchedulerRegeneratorTest extends TestCase
         self::assertSame([9], $cache->deletes);
     }
 
+    public function test_on_transition_deletes_cache_when_leaving_publish(): void
+    {
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $post = new \WP_Post();
+        $post->ID = 11;
+        $post->post_type = 'post';
+        $post->post_status = 'trash';
+        $post->post_password = '';
+
+        $regenerator->onTransition('trash', 'publish', $post);
+
+        self::assertSame([11], $cache->deletes);
+    }
+
+    public function test_on_transition_enqueues_when_becoming_publish(): void
+    {
+        Functions\when('as_has_scheduled_action')->justReturn(false);
+        Functions\expect('as_enqueue_async_action')
+            ->once()
+            ->with(ActionSchedulerRegenerator::REGENERATE_HOOK, [11], 'markout');
+
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $post = new \WP_Post();
+        $post->ID = 11;
+        $post->post_type = 'post';
+        $post->post_status = 'publish';
+        $post->post_password = '';
+
+        $regenerator->onTransition('publish', 'draft', $post);
+    }
+
+    public function test_on_transition_does_nothing_when_status_is_unchanged(): void
+    {
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $post = new \WP_Post();
+        $post->ID = 11;
+        $post->post_type = 'post';
+        $post->post_status = 'publish';
+
+        $regenerator->onTransition('publish', 'publish', $post);
+
+        self::assertSame([], $cache->deletes);
+    }
+
     public function test_handle_regenerate_syncs_valid_public_post(): void
     {
         $post = new \WP_Post();
@@ -2003,6 +2056,7 @@ final class ActionSchedulerRegenerator implements RegeneratorInterface
     public function register(): void
     {
         add_action('save_post', [$this, 'onSave'], 10, 3);
+        add_action('transition_post_status', [$this, 'onTransition'], 10, 3);
         add_action('before_delete_post', [$this, 'onDelete']);
         add_action(self::REGENERATE_HOOK, [$this, 'handleRegenerate']);
     }
@@ -2013,6 +2067,25 @@ final class ActionSchedulerRegenerator implements RegeneratorInterface
             return;
         }
 
+        $this->syncOrPurge($postId, $post);
+    }
+
+    public function onTransition(string $newStatus, string $oldStatus, \WP_Post $post): void
+    {
+        if ($newStatus === $oldStatus) {
+            return;
+        }
+
+        $this->syncOrPurge((int) $post->ID, $post);
+    }
+
+    public function onDelete(int $postId): void
+    {
+        $this->cache->delete($postId);
+    }
+
+    private function syncOrPurge(int $postId, \WP_Post $post): void
+    {
         if (!in_array($post->post_type, self::ALLOWED_TYPES, true)) {
             return;
         }
@@ -2023,11 +2096,6 @@ final class ActionSchedulerRegenerator implements RegeneratorInterface
             return;
         }
 
-        $this->cache->delete($postId);
-    }
-
-    public function onDelete(int $postId): void
-    {
         $this->cache->delete($postId);
     }
 
@@ -2062,7 +2130,7 @@ final class ActionSchedulerRegenerator implements RegeneratorInterface
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `vendor/bin/phpunit tests/Unit/Scheduler/ActionSchedulerRegeneratorTest.php`
-Expected: `OK, all 8 tests pass (one reported as risky, matching the same expect()-only pattern noted in Task 9).`
+Expected: `OK, all 11 tests pass (some reported as risky, matching the same expect()-only pattern noted in Task 9).`
 
 - [ ] **Step 6: Static analysis and style**
 
@@ -2332,7 +2400,9 @@ git commit -m "Add BackfillScheduler for populating the cache on activation"
 - Consumes: every class from Tasks 2–12.
 - Produces: `Markout\Plugin`, constructor `__construct(string $cacheDirectory)`, method `boot(): void`, static methods `activate(): void` and `deactivate(): void`. `Plugin` is a pure composition root — it wires dependencies and holds no WordPress-function-calling logic beyond the small self-check described below. `markout.php` is the WordPress plugin entry file — not unit-tested (requires a loaded WordPress runtime), verified via manual QA (the final task). It self-checks that Composer dependencies and Action Scheduler are actually available, auto-deactivating with an admin notice rather than fataling if not.
 
-**Why backfill scheduling isn't in `activate()`:** `register_activation_hook` callbacks run in the same request as the rest of the plugin's bootstrap, which means Action Scheduler's own initialization (hooked to `plugins_loaded` at the earliest possible priority) has already run by the time `activate()` executes — so `as_*` functions being *callable* isn't in question. But on a brand-new WordPress install where Markout is the only plugin bundling Action Scheduler, its database tables may not have finished their migration by that same request. Scheduling directly from `activate()` risked the backfill action being silently lost. Instead, `Plugin::boot()` (which always runs from the `plugins_loaded` closure in `markout.php`, on every request) calls `maybeScheduleBackfill()`, which schedules the backfill at most once — guarded by a persistent `markout_backfill_scheduled` option so it doesn't re-check `as_has_scheduled_action()` on every page load once it's done its job. `deactivate()` clears that option, so a deactivate/reactivate cycle re-triggers a fresh backfill, matching the manual QA expectation in the final task.
+**Why backfill scheduling isn't in `activate()`:** `register_activation_hook` callbacks run in the same request as the rest of the plugin's bootstrap, which means Action Scheduler's own initialization (hooked to `plugins_loaded` at the earliest possible priority) has already run by the time `activate()` executes — so `as_*` functions being *callable* isn't in question. But on a brand-new WordPress install where Markout is the only plugin bundling Action Scheduler, its database tables may not have finished their migration by that same request. Scheduling directly from `activate()` risked the backfill action being silently lost. Instead, `Plugin::boot()` (which always runs from the `plugins_loaded` closure in `markout.php`, on every request) calls `maybeScheduleBackfill()`, which schedules the backfill at most once.
+
+**Why `add_option()` rather than `get_option()` + `update_option()`:** the guard needs to survive two near-simultaneous requests both reaching `boot()` before either has recorded that scheduling happened (plausible right after activation, e.g. concurrent admin-dashboard requests). `add_option()` performs an insert against a column with a unique index on `option_name` — if two requests race, only one insert can succeed; the other gets back `false` and returns without scheduling anything. A `get_option()` read followed by a separate `update_option()` write has a window between the two where both requests can pass the read check, which would enqueue two overlapping backfill batch chains. `deactivate()` deletes the option, so a deactivate/reactivate cycle re-triggers a fresh backfill, matching the manual QA expectation in the final task.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2428,19 +2498,15 @@ final class Plugin
 
     private function maybeScheduleBackfill(): void
     {
-        if (!function_exists('as_has_scheduled_action') || !function_exists('as_schedule_single_action')) {
+        if (!function_exists('as_schedule_single_action')) {
             return;
         }
 
-        if (get_option(self::BACKFILL_SCHEDULED_OPTION, false)) {
+        if (!add_option(self::BACKFILL_SCHEDULED_OPTION, true, '', false)) {
             return;
         }
 
-        if (!as_has_scheduled_action(BackfillScheduler::HOOK, [0], 'markout')) {
-            as_schedule_single_action(time(), BackfillScheduler::HOOK, [0], 'markout');
-        }
-
-        update_option(self::BACKFILL_SCHEDULED_OPTION, true, false);
+        as_schedule_single_action(time(), BackfillScheduler::HOOK, [0], 'markout');
     }
 
     public static function activate(): void
@@ -2692,7 +2758,7 @@ Expected: updated content reflected in the markdown output.
 - [ ] **Step 7: Verify trash/unpublish removes cache**
 
 Move a published post to Trash, then check `wp-content/uploads/markout/<post-id>.md` on disk.
-Expected: file no longer exists. If it still exists after a few seconds, check whether `wp_trash_post()` fired `save_post` on this WordPress version — if not, this is a known edge case to file as a follow-up (hooking `transition_post_status` as an additional signal), not a blocker for this release.
+Expected: file no longer exists. `ActionSchedulerRegenerator` purges the cache from both `save_post` and `transition_post_status`, so this holds regardless of which internal path `wp_trash_post()` takes on the WordPress version under test.
 
 - [ ] **Step 8: Verify uploads-directory-unwritable fallback**
 

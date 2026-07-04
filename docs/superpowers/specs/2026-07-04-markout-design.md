@@ -159,9 +159,8 @@ presence is the only reliable signal. Gate on `is_singular(['post',
 
 - **Unit (PHPUnit + Brain Monkey):** `HtmlToMarkdownConverter` (HTML
   fixtures → expected markdown), `FrontmatterBuilder` (mock post → expected
-  YAML), `PostVisibility` (mocked `post_password_required` /
-  `current_user_can` combinations), `FileCache` (read/write/delete against
-  a temp directory).
+  YAML), `PostVisibility` (mocked `post_password_required` return values),
+  `FileCache` (read/write/delete against a temp directory).
 - **Integration-style (Brain Monkey mocking WordPress/Action Scheduler
   functions):** `EndpointRouter` registers the endpoint correctly;
   `ActionSchedulerRegenerator` enqueues, dedupes, and deletes on the
