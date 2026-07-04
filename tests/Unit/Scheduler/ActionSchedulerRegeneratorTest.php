@@ -218,6 +218,89 @@ final class ActionSchedulerRegeneratorTest extends TestCase
         self::assertSame([3], $cache->deletes);
     }
 
+    public function test_on_save_ignores_disallowed_post_types(): void
+    {
+        Functions\when('wp_is_post_revision')->justReturn(false);
+        Functions\when('wp_is_post_autosave')->justReturn(false);
+        // No Action Scheduler nor cache calls should happen for an attachment.
+        Functions\expect('as_enqueue_async_action')->never();
+
+        $cache = $this->fakeCache();
+        $cacher = $this->fakeCacher();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $cacher);
+
+        $post = new \WP_Post();
+        $post->ID = 5;
+        $post->post_type = 'attachment';
+        $post->post_status = 'publish';
+        $post->post_password = '';
+
+        $regenerator->onSave(5, $post, true);
+
+        self::assertSame([], $cache->deletes);
+        self::assertSame([], $cacher->syncedPostIds);
+    }
+
+    public function test_enqueue_skips_when_action_already_scheduled(): void
+    {
+        Functions\when('wp_is_post_revision')->justReturn(false);
+        Functions\when('wp_is_post_autosave')->justReturn(false);
+        // Already scheduled -> enqueue() must take its early-return branch and
+        // never call as_enqueue_async_action().
+        Functions\when('as_has_scheduled_action')->justReturn(true);
+
+        $enqueued = false;
+        Functions\when('as_enqueue_async_action')->alias(
+            static function () use (&$enqueued): void {
+                $enqueued = true;
+            }
+        );
+
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $post = new \WP_Post();
+        $post->ID = 5;
+        $post->post_type = 'post';
+        $post->post_status = 'publish';
+        $post->post_password = '';
+
+        $regenerator->onSave(5, $post, true);
+
+        self::assertFalse($enqueued, 'Should not enqueue a duplicate action.');
+        self::assertSame([], $cache->deletes);
+    }
+
+    public function test_enqueue_dispatches_async_action_when_not_scheduled(): void
+    {
+        Functions\when('wp_is_post_revision')->justReturn(false);
+        Functions\when('wp_is_post_autosave')->justReturn(false);
+        Functions\when('as_has_scheduled_action')->justReturn(false);
+
+        $dispatched = [];
+        Functions\when('as_enqueue_async_action')->alias(
+            static function (string $hook, array $args, string $group) use (&$dispatched): void {
+                $dispatched = [$hook, $args, $group];
+            }
+        );
+
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $post = new \WP_Post();
+        $post->ID = 42;
+        $post->post_type = 'page';
+        $post->post_status = 'publish';
+        $post->post_password = '';
+
+        $regenerator->onSave(42, $post, true);
+
+        self::assertSame(
+            [ActionSchedulerRegenerator::REGENERATE_HOOK, [42], 'markout'],
+            $dispatched
+        );
+    }
+
     public function test_handle_regenerate_deletes_cache_when_post_is_not_publish(): void
     {
         $post = new \WP_Post();

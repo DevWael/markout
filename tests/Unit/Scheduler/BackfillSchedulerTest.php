@@ -95,4 +95,45 @@ final class BackfillSchedulerTest extends TestCase
 
         $scheduler->runBatch(0);
     }
+
+    public function test_run_batch_schedules_next_offset_when_batch_is_full(): void
+    {
+        $fullBatch = array_map(fn (int $i) => $this->makePost($i), range(1, 20));
+
+        Functions\when('as_has_scheduled_action')->justReturn(false);
+
+        $scheduled = null;
+        Functions\when('as_schedule_single_action')->alias(
+            static function (int $timestamp, string $hook, array $args, string $group) use (&$scheduled): void {
+                $scheduled = [$hook, $args, $group];
+            }
+        );
+
+        $scheduler = new BackfillScheduler($this->finderReturning($fullBatch), $this->fakeCacher());
+
+        $scheduler->runBatch(40);
+
+        // Offset 40 + batch of 20 should schedule the next batch at offset 60.
+        self::assertSame([BackfillScheduler::HOOK, [60], 'markout'], $scheduled);
+    }
+
+    public function test_run_batch_skips_scheduling_when_next_batch_already_queued(): void
+    {
+        $fullBatch = array_map(fn (int $i) => $this->makePost($i), range(1, 20));
+
+        Functions\when('as_has_scheduled_action')->justReturn(true);
+
+        $scheduledCalls = 0;
+        Functions\when('as_schedule_single_action')->alias(
+            static function () use (&$scheduledCalls): void {
+                $scheduledCalls++;
+            }
+        );
+
+        $scheduler = new BackfillScheduler($this->finderReturning($fullBatch), $this->fakeCacher());
+
+        $scheduler->runBatch(0);
+
+        self::assertSame(0, $scheduledCalls, 'Should not double-schedule an already-queued batch.');
+    }
 }
