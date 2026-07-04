@@ -8,7 +8,9 @@
 
 **Tech Stack:** PHP 8.1+, Composer/PSR-4, `league/html-to-markdown`, `woocommerce/action-scheduler`, PHPUnit 9 + Brain Monkey (unit tests, no full WP test suite), PHPStan level 8, PHPCS PSR-12.
 
-**Revision note:** This is v2 of the plan, revised after a round of specialized review (security, code quality, test correctness, Action Scheduler/lifecycle, spec fidelity). Fixes folded in: cached markdown is never written for password-protected posts (v1 leaked them via the public uploads path); atomic cache writes (temp file + rename); every cross-class collaboration now goes through a named interface instead of a bare `\Closure`; a test that would have fatally crashed on a parameter-type mismatch is corrected; missing-dependency handling now actually auto-deactivates the plugin per spec instead of just showing a notice; `uninstall.php`'s recursive delete is symlink-safe; a defense-in-depth capability check was added to the request path.
+**Revision history:**
+- **v2** (after round-1 review): fixed a cache-security leak where password-protected posts were being cached in the public uploads directory; replaced bare `\Closure` collaborators with named interfaces; made cache writes atomic; made `uninstall.php`'s recursive delete symlink-safe; made missing-dependency handling actually auto-deactivate the plugin.
+- **v3** (after round-2 review, this version): **removed a `current_user_can('read_post', ...)` capability check that was itself a functional regression** — it broke `/md` access for every anonymous visitor on every public post, because WordPress's `read_post` meta capability resolves to the `read` primitive capability, which logged-out users never have, even for fully public content. The existing `is_singular()` gate (upstream, in `EndpointRouter`) plus `post_password_required()` (inside `MarkdownResponder`) already correctly mirror WordPress's own visibility rules, per the spec — no additional capability check was needed. Also: extracted a `PostCacher` to eliminate duplicated password-check-then-generate-then-write logic between `ActionSchedulerRegenerator` and `BackfillScheduler`; added a `MarkdownRespondingInterface` so `MarkdownRequestHandler` depends on an interface rather than a concrete class; moved backfill scheduling out of the activation hook (where Action Scheduler's data store may not have finished migrating yet on a brand-new install) into a persistent-flag-guarded check on every `plugins_loaded`, which also consolidates the spec's "activation self-check" behavior into one place; fixed `FrontmatterBuilder` to escape backslashes as well as quotes (otherwise a title containing a literal backslash produced invalid YAML).
 
 ## Global Constraints
 
@@ -21,9 +23,10 @@
 - `declare(strict_types=1);` at the top of every PHP file in `src/`.
 - No database storage for the markdown cache — file-based only, under `wp-content/uploads/markout/`.
 - Scope is Posts and Pages only (`post`, `page` post types).
-- **The cache is never written — and any existing entry is deleted — for password-protected posts, regardless of `post_status`.** The uploads directory is web-accessible; a cached file for a password-protected post would be readable by a direct HTTP GET, bypassing WordPress's own password gate entirely.
+- **The cache is never written — and any existing entry is deleted — for password-protected posts, regardless of `post_status`.** The uploads directory is web-accessible; a cached file for a password-protected post would be readable by a direct HTTP GET, bypassing WordPress's own password gate entirely. This policy lives in exactly one place, `PostCacher`, so it can't drift out of sync between the save-triggered path and the backfill path.
+- **No capability checks are added on top of `is_singular()` + `post_password_required()`.** Those two checks, done in the right places (routing gate and `MarkdownResponder` respectively), already fully mirror WordPress's own visibility rules. Adding `current_user_can()` on top is not "extra safety" — it actively breaks public access for anonymous visitors, since WordPress's capability system requires the `read` capability even for fully public posts, which logged-out users don't have.
 - Tests use Brain Monkey (`Markout\Tests\TestCase` base) wherever WordPress functions are touched; pure-logic classes get plain PHPUnit tests with no WP mocking.
-- Code paths that call `header()`/`exit` (`MarkdownRequestHandler`'s success path, `markout.php`, `uninstall.php`) are not unit-testable by nature — they're verified via the manual QA task (Task 14) instead of automated tests.
+- Code paths that call `header()`/`exit` (`MarkdownRequestHandler`, `markout.php`, `uninstall.php`) are not unit-testable by nature — they're verified via the manual QA task (the final task) instead of automated tests.
 
 ---
 
@@ -200,7 +203,7 @@ final class SmokeTest extends TestCase
 - [ ] **Step 9: Run the test suite**
 
 Run: `composer test`
-Expected: `OK (1 test, 1 assertion)`
+Expected: `OK, all 1 test passes.`
 
 - [ ] **Step 10: Run static analysis and code style checks**
 
@@ -234,7 +237,7 @@ git commit -m "Set up Composer, PHPCS, PHPStan, and PHPUnit/Brain Monkey scaffol
 - Consumes: global WP function `post_password_required(\WP_Post $post): bool`.
 - Produces: `Markout\Support\PostVisibility` with two methods:
   - `requiresPassword(\WP_Post $post): bool` — session-aware check (accounts for the visitor's password cookie), used by `MarkdownResponder` (Task 7) to decide what to serve on a live request.
-  - `hasPassword(\WP_Post $post): bool` — stateless check of `$post->post_password !== ''`, used by `ActionSchedulerRegenerator` (Task 10) and `BackfillScheduler` (Task 11) to decide whether a post is eligible for caching at all. A background job has no visitor session, so it must use the stateless check — caching based on the session-aware check would incorrectly cache password-protected content the first time it's regenerated outside of a password-entry request.
+  - `hasPassword(\WP_Post $post): bool` — stateless check of `$post->post_password !== ''`, used by `PostCacher` (Task 10) to decide whether a post is eligible for caching at all. A background job has no visitor session, so it must use the stateless check.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -320,7 +323,7 @@ final class PostVisibility
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `vendor/bin/phpunit tests/Unit/Support/PostVisibilityTest.php`
-Expected: `OK (4 tests, 4 assertions)`
+Expected: `OK, all 4 tests pass.`
 
 - [ ] **Step 5: Static analysis and style**
 
@@ -347,7 +350,7 @@ git commit -m "Add PostVisibility for password-protection checks"
 - Produces:
   - `Markout\Cache\CacheInterface` with `get(int $postId): ?string`, `write(int $postId, string $content): bool`, `delete(int $postId): bool`.
   - `Markout\Cache\FileCache implements CacheInterface`, constructor `__construct(string $directory)`.
-  - Used by `MarkdownResponder` (Task 7), `ActionSchedulerRegenerator` (Task 10), `BackfillScheduler` (Task 11).
+  - Used by `MarkdownResponder` (Task 7), `PostCacher` (Task 10), `ActionSchedulerRegenerator` (Task 11).
 
 Writes are atomic: content is written to a uniquely-named temp file in the same directory, then moved into place with `rename()` (atomic on the same filesystem). This prevents a concurrent reader (a live request hitting a cache miss) from ever observing a partially-written file while an async regeneration job is mid-write.
 
@@ -565,7 +568,7 @@ final class FileCache implements CacheInterface
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `vendor/bin/phpunit tests/Unit/Cache/FileCacheTest.php`
-Expected: `OK (6 tests, 8 assertions)`
+Expected: `OK, all 6 tests pass.`
 
 - [ ] **Step 6: Static analysis and style**
 
@@ -589,6 +592,8 @@ git commit -m "Add file-based cache for converted markdown with atomic writes"
 
 **Interfaces:**
 - Produces: `Markout\Conversion\FrontmatterBuilder::build(array{title:string,date:string,author:string,permalink:string} $meta): string`. Pure function, no WordPress calls. Used by `MarkdownResponder` (Task 7).
+
+Values are escaped for backslashes *and* double quotes (in that order — escaping backslashes first, then quotes, avoids double-escaping the backslashes that the quote-escaping step introduces) so that a title like `C:\Users\test` produces valid double-quoted YAML rather than a malformed escape sequence.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -639,6 +644,20 @@ final class FrontmatterBuilderTest extends TestCase
 
         self::assertStringContainsString('title: "He said \\"hi\\""', $result);
     }
+
+    public function test_build_escapes_backslashes_in_values(): void
+    {
+        $builder = new FrontmatterBuilder();
+
+        $result = $builder->build([
+            'title' => 'C:\\Users\\test',
+            'date' => '2026-07-04T00:00:00+00:00',
+            'author' => 'Ahmad',
+            'permalink' => 'https://example.com/x/',
+        ]);
+
+        self::assertStringContainsString('title: "C:\\\\Users\\\\test"', $result);
+    }
 }
 ```
 
@@ -674,7 +693,9 @@ final class FrontmatterBuilder
 
     private function quote(string $value): string
     {
-        return '"' . str_replace('"', '\\"', $value) . '"';
+        $escaped = str_replace(['\\', '"'], ['\\\\', '\\"'], $value);
+
+        return '"' . $escaped . '"';
     }
 }
 ```
@@ -682,7 +703,7 @@ final class FrontmatterBuilder
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `vendor/bin/phpunit tests/Unit/Conversion/FrontmatterBuilderTest.php`
-Expected: `OK (2 tests, 2 assertions)`
+Expected: `OK, all 3 tests pass.`
 
 - [ ] **Step 5: Static analysis and style**
 
@@ -822,7 +843,7 @@ final class HtmlToMarkdownConverter implements ConverterInterface
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `vendor/bin/phpunit tests/Unit/Conversion/HtmlToMarkdownConverterTest.php`
-Expected: `OK (2 tests, 2 assertions)`
+Expected: `OK, all 2 tests pass.`
 
 - [ ] **Step 6: Static analysis and style**
 
@@ -846,7 +867,7 @@ git commit -m "Add HTML to Markdown converter with strip-tags fallback"
 - Test: `tests/Unit/Support/PostMetaExtractorTest.php`
 
 **Interfaces:**
-- Produces: `Markout\Support\PostMetaExtractorInterface::extract(\WP_Post $post): array` (returns `array{title:string,date:string,author:string,permalink:string}`), implemented by `PostMetaExtractor` (wraps `get_the_title`/`get_the_date`/`get_the_author_meta`/`get_permalink`). Used by `MarkdownRequestHandler` (Task 8), `ActionSchedulerRegenerator` (Task 10), `BackfillScheduler` (Task 11), all wired once in `Plugin` (Task 12). Extracting this into its own class keeps `Plugin` a pure composition root with no WordPress-function calls of its own.
+- Produces: `Markout\Support\PostMetaExtractorInterface::extract(\WP_Post $post): array` (returns `array{title:string,date:string,author:string,permalink:string}`), implemented by `PostMetaExtractor` (wraps `get_the_title`/`get_the_date`/`get_the_author_meta`/`get_permalink`). Used by `MarkdownRequestHandler` (Task 8) and `PostCacher` (Task 10), both wired once in `Plugin` (Task 13). Extracting this into its own class keeps `Plugin` a pure composition root with no WordPress-function calls of its own.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -934,7 +955,7 @@ final class PostMetaExtractor implements PostMetaExtractorInterface
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `vendor/bin/phpunit tests/Unit/Support/PostMetaExtractorTest.php`
-Expected: `OK (1 test, 1 assertion)`
+Expected: `OK, all 1 test passes.`
 
 - [ ] **Step 6: Static analysis and style**
 
@@ -950,10 +971,11 @@ git commit -m "Add PostMetaExtractor for pulling frontmatter source data from Wo
 
 ---
 
-### Task 7: MarkdownGeneratorInterface + Http\Response + MarkdownResponder
+### Task 7: MarkdownGeneratorInterface + MarkdownRespondingInterface + Http\Response + MarkdownResponder
 
 **Files:**
 - Create: `src/Conversion/MarkdownGeneratorInterface.php`
+- Create: `src/Http/MarkdownRespondingInterface.php`
 - Create: `src/Http/Response.php`
 - Create: `src/Http/MarkdownResponder.php`
 - Test: `tests/Unit/Http/MarkdownResponderTest.php`
@@ -961,9 +983,10 @@ git commit -m "Add PostMetaExtractor for pulling frontmatter source data from Wo
 **Interfaces:**
 - Consumes: `CacheInterface` (Task 3), `ConverterInterface` (Task 5), `FrontmatterBuilder` (Task 4), `PostVisibility` (Task 2).
 - Produces:
-  - `Markout\Conversion\MarkdownGeneratorInterface::generate(\WP_Post $post, array $meta): string` — implemented by `MarkdownResponder`. This is the seam the regeneration paths (Task 10, Task 11) depend on, so they never need to know about caching or visibility, only "turn this post into markdown."
+  - `Markout\Conversion\MarkdownGeneratorInterface::generate(\WP_Post $post, array $meta): string` — implemented by `MarkdownResponder`. This is the seam the caching/regeneration path (`PostCacher`, Task 10) depends on, so it never needs to know about caching or visibility, only "turn this post into markdown."
+  - `Markout\Http\MarkdownRespondingInterface::respond(\WP_Post $post, array $meta): Response` — also implemented by `MarkdownResponder`. This is the seam `MarkdownRequestHandler` (Task 8) depends on for the full live-request flow (password gate, cache check, generate-and-cache-on-miss). Splitting this from `MarkdownGeneratorInterface` keeps each consumer typed only to the behavior it actually needs, and keeps `MarkdownResponder` itself fakeable in `MarkdownRequestHandler`'s tests.
   - `Markout\Http\Response` — readonly value object: `int $status`, `string $contentType`, `string $body`.
-  - `Markout\Http\MarkdownResponder implements MarkdownGeneratorInterface`, with `respond(\WP_Post $post, array $meta): Response` (the full live-request flow: password gate, cache check, generate-and-cache-on-miss) and `generate(\WP_Post $post, array $meta): string` (conversion only, no caching/visibility — used directly by the interface). Used by `MarkdownRequestHandler` (Task 8) via its concrete type (it needs the full `respond()` flow), and by `ActionSchedulerRegenerator`/`BackfillScheduler` via `MarkdownGeneratorInterface` (they only need `generate()`).
+  - `Markout\Http\MarkdownResponder implements MarkdownGeneratorInterface, MarkdownRespondingInterface`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1155,7 +1178,25 @@ final class Response
 }
 ```
 
-- [ ] **Step 5: Write `MarkdownResponder`**
+- [ ] **Step 5: Write `MarkdownRespondingInterface`**
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace Markout\Http;
+
+interface MarkdownRespondingInterface
+{
+    /**
+     * @param array{title:string,date:string,author:string,permalink:string} $meta
+     */
+    public function respond(\WP_Post $post, array $meta): Response;
+}
+```
+
+- [ ] **Step 6: Write `MarkdownResponder`**
 
 ```php
 <?php
@@ -1170,7 +1211,7 @@ use Markout\Conversion\FrontmatterBuilder;
 use Markout\Conversion\MarkdownGeneratorInterface;
 use Markout\Support\PostVisibility;
 
-final class MarkdownResponder implements MarkdownGeneratorInterface
+final class MarkdownResponder implements MarkdownGeneratorInterface, MarkdownRespondingInterface
 {
     public function __construct(
         private readonly CacheInterface $cache,
@@ -1210,20 +1251,20 @@ final class MarkdownResponder implements MarkdownGeneratorInterface
 }
 ```
 
-- [ ] **Step 6: Run test to verify it passes**
+- [ ] **Step 7: Run test to verify it passes**
 
 Run: `vendor/bin/phpunit tests/Unit/Http/MarkdownResponderTest.php`
-Expected: `OK (3 tests, 8 assertions)`
+Expected: `OK, all 3 tests pass.`
 
-- [ ] **Step 7: Static analysis and style**
+- [ ] **Step 8: Static analysis and style**
 
 Run: `composer stan && composer cs`
 Expected: no errors.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/Conversion/MarkdownGeneratorInterface.php src/Http/Response.php src/Http/MarkdownResponder.php tests/Unit/Http/MarkdownResponderTest.php
+git add src/Conversion/MarkdownGeneratorInterface.php src/Http/MarkdownRespondingInterface.php src/Http/Response.php src/Http/MarkdownResponder.php tests/Unit/Http/MarkdownResponderTest.php
 git commit -m "Add MarkdownResponder tying visibility, cache, and conversion together"
 ```
 
@@ -1234,91 +1275,16 @@ git commit -m "Add MarkdownResponder tying visibility, cache, and conversion tog
 **Files:**
 - Create: `src/Http/MarkdownRequestHandlerInterface.php`
 - Create: `src/Http/MarkdownRequestHandler.php`
-- Test: `tests/Unit/Http/MarkdownRequestHandlerTest.php`
 
 **Interfaces:**
-- Consumes: `MarkdownResponder` (Task 7, concrete — this class is specifically the HTTP glue built around it, so no interface indirection is needed here), `PostMetaExtractorInterface` (Task 6).
+- Consumes: `MarkdownRespondingInterface` (Task 7), `PostMetaExtractorInterface` (Task 6).
 - Produces: `Markout\Http\MarkdownRequestHandlerInterface::handle(\WP_Post $post): void`, implemented by `MarkdownRequestHandler`. Used by `EndpointRouter` (Task 9).
 
-This class is the only place that touches raw HTTP output (`header()`, `status_header()`, `exit`). It also adds a defense-in-depth capability check (`current_user_can('read_post', ...)`) before responding, and calls `nocache_headers()` plus clears any output buffers before sending — preventing a page cache or CDN from storing a 403/password response under the `/md` URL, and avoiding "headers already sent" corruption if something upstream already echoed output.
+This class is the only place that touches raw HTTP output (`header()`, `status_header()`, `exit`). It calls `nocache_headers()` and clears any output buffers before sending, so a page cache or CDN never stores a password-denied response under the `/md` URL, and "headers already sent" corruption is avoided if something upstream already echoed output.
 
-**Testing note:** `handle()`'s success path ends in `header()`/`exit`, which would terminate the PHPUnit process if exercised directly. Only the early-return (capability-denied) path is unit-tested here; the full success path is covered by manual QA (Task 14).
+**Why there's no automated test here:** an earlier revision of this class added a `current_user_can('read_post', ...)` capability check "for defense in depth." That check was wrong and has been removed — WordPress's `read_post` meta capability resolves to the `read` primitive capability, which anonymous visitors never have, even for fully public posts, so the check silently broke `/md` access for every logged-out visitor on every public post. The correct visibility gating already happens in `EndpointRouter` (`is_singular()`, upstream) and `MarkdownResponder` (`post_password_required()`), both of which are unit-tested where they live. With the capability check gone, `handle()` has no conditional logic left to unit-test in isolation — it unconditionally calls `respond()` then `emit()`, and `emit()` ends in `header()`/`exit`, which would terminate the PHPUnit process if exercised directly. This mirrors `markout.php` and `uninstall.php`: verified via manual QA (the final task), not automated tests.
 
-- [ ] **Step 1: Write the failing test**
-
-```php
-<?php
-
-declare(strict_types=1);
-
-namespace Markout\Tests\Unit\Http;
-
-use Brain\Monkey\Functions;
-use Markout\Cache\CacheInterface;
-use Markout\Conversion\FrontmatterBuilder;
-use Markout\Conversion\HtmlToMarkdownConverter;
-use Markout\Http\MarkdownRequestHandler;
-use Markout\Http\MarkdownResponder;
-use Markout\Support\PostMetaExtractorInterface;
-use Markout\Support\PostVisibility;
-use Markout\Tests\TestCase;
-
-final class MarkdownRequestHandlerTest extends TestCase
-{
-    public function test_handle_returns_without_responding_when_user_lacks_capability(): void
-    {
-        Functions\when('current_user_can')->justReturn(false);
-
-        $cacheSpy = new class implements CacheInterface {
-            public int $getCalls = 0;
-
-            public function get(int $postId): ?string
-            {
-                $this->getCalls++;
-
-                return null;
-            }
-
-            public function write(int $postId, string $content): bool
-            {
-                return true;
-            }
-
-            public function delete(int $postId): bool
-            {
-                return true;
-            }
-        };
-
-        $responder = new MarkdownResponder(
-            $cacheSpy,
-            new HtmlToMarkdownConverter(),
-            new FrontmatterBuilder(),
-            new PostVisibility()
-        );
-
-        $metaExtractor = new class implements PostMetaExtractorInterface {
-            public function extract(\WP_Post $post): array
-            {
-                return ['title' => '', 'date' => '', 'author' => '', 'permalink' => ''];
-            }
-        };
-
-        $handler = new MarkdownRequestHandler($responder, $metaExtractor);
-
-        $handler->handle(new \WP_Post());
-
-        self::assertSame(0, $cacheSpy->getCalls);
-    }
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `vendor/bin/phpunit tests/Unit/Http/MarkdownRequestHandlerTest.php`
-Expected: FAIL — `Class "Markout\Http\MarkdownRequestHandler" not found`.
-
-- [ ] **Step 3: Write `MarkdownRequestHandlerInterface`**
+- [ ] **Step 1: Write `MarkdownRequestHandlerInterface`**
 
 ```php
 <?php
@@ -1333,7 +1299,7 @@ interface MarkdownRequestHandlerInterface
 }
 ```
 
-- [ ] **Step 4: Write `MarkdownRequestHandler`**
+- [ ] **Step 2: Write `MarkdownRequestHandler`**
 
 ```php
 <?php
@@ -1347,17 +1313,13 @@ use Markout\Support\PostMetaExtractorInterface;
 final class MarkdownRequestHandler implements MarkdownRequestHandlerInterface
 {
     public function __construct(
-        private readonly MarkdownResponder $responder,
+        private readonly MarkdownRespondingInterface $responder,
         private readonly PostMetaExtractorInterface $metaExtractor
     ) {
     }
 
     public function handle(\WP_Post $post): void
     {
-        if (!current_user_can('read_post', $post->ID)) {
-            return;
-        }
-
         $response = $this->responder->respond($post, $this->metaExtractor->extract($post));
 
         $this->emit($response);
@@ -1381,21 +1343,16 @@ final class MarkdownRequestHandler implements MarkdownRequestHandlerInterface
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
-
-Run: `vendor/bin/phpunit tests/Unit/Http/MarkdownRequestHandlerTest.php`
-Expected: `OK (1 test, 1 assertion)`
-
-- [ ] **Step 6: Static analysis and style**
+- [ ] **Step 3: Static analysis and style**
 
 Run: `composer stan && composer cs`
 Expected: no errors.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/Http/MarkdownRequestHandlerInterface.php src/Http/MarkdownRequestHandler.php tests/Unit/Http/MarkdownRequestHandlerTest.php
-git commit -m "Add MarkdownRequestHandler for capability-checked HTTP output"
+git add src/Http/MarkdownRequestHandlerInterface.php src/Http/MarkdownRequestHandler.php
+git commit -m "Add MarkdownRequestHandler for cache-safe HTTP output"
 ```
 
 ---
@@ -1412,6 +1369,8 @@ git commit -m "Add MarkdownRequestHandler for capability-checked HTTP output"
 - Produces:
   - `Markout\Router\RouterInterface::register(): void`.
   - `Markout\Router\EndpointRouter implements RouterInterface`, constructor `__construct(MarkdownRequestHandlerInterface $handler)`, public method `isMarkdownRequest(array $queryVars): bool` (pure, unit-tested directly).
+
+This is the class responsible for the spec's `is_singular(['post', 'page'])` visibility gate — the primary mechanism (alongside `post_password_required()` inside `MarkdownResponder`) that makes Markout's visibility mirror WordPress's own rules, with no additional capability checks layered on top.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1505,6 +1464,8 @@ final class EndpointRouterTest extends TestCase
 }
 ```
 
+**Note on assertion counts:** `test_register_hooks_into_init_and_template_redirect` verifies its expectation entirely through Brain Monkey's `Functions\expect()->twice()`, which is checked during `Monkey\tearDown()` rather than via a `self::assert*()` call — so it contributes to the "tests" count but not the "assertions" count, and PHPUnit will mark it "risky" (no assertions performed) even though it passes. This is expected and not a failure.
+
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `vendor/bin/phpunit tests/Unit/Router/EndpointRouterTest.php`
@@ -1584,7 +1545,7 @@ final class EndpointRouter implements RouterInterface
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `vendor/bin/phpunit tests/Unit/Router/EndpointRouterTest.php`
-Expected: `OK (5 tests, 5 assertions)`
+Expected: `OK, all 5 tests pass (one reported as risky — see note above).`
 
 - [ ] **Step 6: Static analysis and style**
 
@@ -1600,18 +1561,18 @@ git commit -m "Add EndpointRouter registering the /md rewrite endpoint"
 
 ---
 
-### Task 10: RegeneratorInterface + ActionSchedulerRegenerator
+### Task 10: PostCacherInterface + PostCacher
 
 **Files:**
-- Create: `src/Scheduler/RegeneratorInterface.php`
-- Create: `src/Scheduler/ActionSchedulerRegenerator.php`
-- Test: `tests/Unit/Scheduler/ActionSchedulerRegeneratorTest.php`
+- Create: `src/Scheduler/PostCacherInterface.php`
+- Create: `src/Scheduler/PostCacher.php`
+- Test: `tests/Unit/Scheduler/PostCacherTest.php`
 
 **Interfaces:**
 - Consumes: `CacheInterface` (Task 3), `MarkdownGeneratorInterface` (Task 7), `PostMetaExtractorInterface` (Task 6), `PostVisibility` (Task 2).
-- Produces: `Markout\Scheduler\ActionSchedulerRegenerator implements RegeneratorInterface`, public constant `REGENERATE_HOOK = 'markout_regenerate_md'`, methods `register(): void`, `onSave(int $postId, \WP_Post $post, bool $update): void`, `onDelete(int $postId): void`, `handleRegenerate(int $postId): void`.
+- Produces: `Markout\Scheduler\PostCacherInterface::sync(\WP_Post $post): void`, implemented by `PostCacher`. Used by `ActionSchedulerRegenerator` (Task 11) and `BackfillScheduler` (Task 12).
 
-A post is only eligible for caching if it's `publish` status, an allowed type, **and has no password set** (`PostVisibility::hasPassword()`). Password-protected posts are never written to the cache — any transition into a password-protected state deletes the existing cache entry instead.
+This class exists to hold the cache-or-purge policy — "if the post has a password, delete any cached file and never write one; otherwise generate fresh markdown and write it" — in exactly one place. Both the save-triggered regeneration path and the backfill path need this identical decision; without a shared collaborator, the logic (and the password-safety rule in particular) would need to be duplicated and kept in sync by hand across two classes.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1622,405 +1583,14 @@ declare(strict_types=1);
 
 namespace Markout\Tests\Unit\Scheduler;
 
-use Brain\Monkey\Functions;
 use Markout\Cache\CacheInterface;
 use Markout\Conversion\MarkdownGeneratorInterface;
-use Markout\Scheduler\ActionSchedulerRegenerator;
+use Markout\Scheduler\PostCacher;
 use Markout\Support\PostMetaExtractorInterface;
 use Markout\Support\PostVisibility;
-use Markout\Tests\TestCase;
+use PHPUnit\Framework\TestCase;
 
-final class ActionSchedulerRegeneratorTest extends TestCase
-{
-    private function fakeCache(): CacheInterface
-    {
-        return new class implements CacheInterface {
-            public array $writes = [];
-            public array $deletes = [];
-
-            public function get(int $postId): ?string
-            {
-                return null;
-            }
-
-            public function write(int $postId, string $content): bool
-            {
-                $this->writes[] = [$postId, $content];
-
-                return true;
-            }
-
-            public function delete(int $postId): bool
-            {
-                $this->deletes[] = $postId;
-
-                return true;
-            }
-        };
-    }
-
-    private function fakeGenerator(string $value = 'x'): MarkdownGeneratorInterface
-    {
-        return new class ($value) implements MarkdownGeneratorInterface {
-            public function __construct(private string $value)
-            {
-            }
-
-            public function generate(\WP_Post $post, array $meta): string
-            {
-                return $this->value;
-            }
-        };
-    }
-
-    private function fakeMetaExtractor(): PostMetaExtractorInterface
-    {
-        return new class implements PostMetaExtractorInterface {
-            public function extract(\WP_Post $post): array
-            {
-                return ['title' => '', 'date' => '', 'author' => '', 'permalink' => ''];
-            }
-        };
-    }
-
-    public function test_on_save_enqueues_when_publish_allowed_type_and_no_password(): void
-    {
-        Functions\when('wp_is_post_revision')->justReturn(false);
-        Functions\when('wp_is_post_autosave')->justReturn(false);
-        Functions\when('as_has_scheduled_action')->justReturn(false);
-        Functions\expect('as_enqueue_async_action')
-            ->once()
-            ->with(ActionSchedulerRegenerator::REGENERATE_HOOK, [5], 'markout');
-
-        $cache = $this->fakeCache();
-        $regenerator = new ActionSchedulerRegenerator(
-            $cache,
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
-
-        $post = new \WP_Post();
-        $post->post_type = 'post';
-        $post->post_status = 'publish';
-        $post->post_password = '';
-
-        $regenerator->onSave(5, $post, true);
-    }
-
-    public function test_on_save_deletes_cache_when_not_publish(): void
-    {
-        Functions\when('wp_is_post_revision')->justReturn(false);
-        Functions\when('wp_is_post_autosave')->justReturn(false);
-
-        $cache = $this->fakeCache();
-        $regenerator = new ActionSchedulerRegenerator(
-            $cache,
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
-
-        $post = new \WP_Post();
-        $post->post_type = 'post';
-        $post->post_status = 'draft';
-        $post->post_password = '';
-
-        $regenerator->onSave(5, $post, true);
-
-        self::assertSame([5], $cache->deletes);
-    }
-
-    public function test_on_save_deletes_cache_when_password_protected_even_if_published(): void
-    {
-        Functions\when('wp_is_post_revision')->justReturn(false);
-        Functions\when('wp_is_post_autosave')->justReturn(false);
-
-        $cache = $this->fakeCache();
-        $regenerator = new ActionSchedulerRegenerator(
-            $cache,
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
-
-        $post = new \WP_Post();
-        $post->post_type = 'post';
-        $post->post_status = 'publish';
-        $post->post_password = 'secret';
-
-        $regenerator->onSave(5, $post, true);
-
-        self::assertSame([5], $cache->deletes);
-    }
-
-    public function test_on_save_skips_revisions(): void
-    {
-        Functions\when('wp_is_post_revision')->justReturn(true);
-        Functions\when('wp_is_post_autosave')->justReturn(false);
-
-        $cache = $this->fakeCache();
-        $regenerator = new ActionSchedulerRegenerator(
-            $cache,
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
-
-        $post = new \WP_Post();
-        $post->post_type = 'post';
-        $post->post_status = 'publish';
-
-        $regenerator->onSave(5, $post, true);
-
-        self::assertSame([], $cache->deletes);
-        self::assertSame([], $cache->writes);
-    }
-
-    public function test_on_delete_removes_cache(): void
-    {
-        $cache = $this->fakeCache();
-        $regenerator = new ActionSchedulerRegenerator(
-            $cache,
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
-
-        $regenerator->onDelete(9);
-
-        self::assertSame([9], $cache->deletes);
-    }
-
-    public function test_handle_regenerate_writes_cache_for_valid_public_post(): void
-    {
-        $post = new \WP_Post();
-        $post->ID = 3;
-        $post->post_type = 'page';
-        $post->post_status = 'publish';
-        $post->post_password = '';
-
-        Functions\when('get_post')->justReturn($post);
-
-        $cache = $this->fakeCache();
-        $regenerator = new ActionSchedulerRegenerator(
-            $cache,
-            $this->fakeGenerator('regenerated-markdown'),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
-
-        $regenerator->handleRegenerate(3);
-
-        self::assertSame([[3, 'regenerated-markdown']], $cache->writes);
-    }
-
-    public function test_handle_regenerate_deletes_cache_when_post_no_longer_valid(): void
-    {
-        Functions\when('get_post')->justReturn(null);
-
-        $cache = $this->fakeCache();
-        $regenerator = new ActionSchedulerRegenerator(
-            $cache,
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
-
-        $regenerator->handleRegenerate(3);
-
-        self::assertSame([3], $cache->deletes);
-    }
-
-    public function test_handle_regenerate_deletes_cache_when_post_is_password_protected(): void
-    {
-        $post = new \WP_Post();
-        $post->ID = 3;
-        $post->post_type = 'page';
-        $post->post_status = 'publish';
-        $post->post_password = 'secret';
-
-        Functions\when('get_post')->justReturn($post);
-
-        $cache = $this->fakeCache();
-        $regenerator = new ActionSchedulerRegenerator(
-            $cache,
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
-
-        $regenerator->handleRegenerate(3);
-
-        self::assertSame([3], $cache->deletes);
-    }
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `vendor/bin/phpunit tests/Unit/Scheduler/ActionSchedulerRegeneratorTest.php`
-Expected: FAIL — `Class "Markout\Scheduler\ActionSchedulerRegenerator" not found`.
-
-- [ ] **Step 3: Write `RegeneratorInterface`**
-
-```php
-<?php
-
-declare(strict_types=1);
-
-namespace Markout\Scheduler;
-
-interface RegeneratorInterface
-{
-    public function register(): void;
-}
-```
-
-- [ ] **Step 4: Write `ActionSchedulerRegenerator`**
-
-```php
-<?php
-
-declare(strict_types=1);
-
-namespace Markout\Scheduler;
-
-use Markout\Cache\CacheInterface;
-use Markout\Conversion\MarkdownGeneratorInterface;
-use Markout\Support\PostMetaExtractorInterface;
-use Markout\Support\PostVisibility;
-
-final class ActionSchedulerRegenerator implements RegeneratorInterface
-{
-    public const REGENERATE_HOOK = 'markout_regenerate_md';
-    private const ALLOWED_TYPES = ['post', 'page'];
-    private const GROUP = 'markout';
-
-    public function __construct(
-        private readonly CacheInterface $cache,
-        private readonly MarkdownGeneratorInterface $generator,
-        private readonly PostMetaExtractorInterface $metaExtractor,
-        private readonly PostVisibility $visibility
-    ) {
-    }
-
-    public function register(): void
-    {
-        add_action('save_post', [$this, 'onSave'], 10, 3);
-        add_action('before_delete_post', [$this, 'onDelete']);
-        add_action(self::REGENERATE_HOOK, [$this, 'handleRegenerate']);
-    }
-
-    public function onSave(int $postId, \WP_Post $post, bool $update): void
-    {
-        if (wp_is_post_revision($postId) || wp_is_post_autosave($postId)) {
-            return;
-        }
-
-        if (!in_array($post->post_type, self::ALLOWED_TYPES, true)) {
-            return;
-        }
-
-        if ($post->post_status === 'publish' && !$this->visibility->hasPassword($post)) {
-            $this->enqueue($postId);
-
-            return;
-        }
-
-        $this->cache->delete($postId);
-    }
-
-    public function onDelete(int $postId): void
-    {
-        $this->cache->delete($postId);
-    }
-
-    public function handleRegenerate(int $postId): void
-    {
-        $post = get_post($postId);
-
-        if (
-            !($post instanceof \WP_Post)
-            || $post->post_status !== 'publish'
-            || !in_array($post->post_type, self::ALLOWED_TYPES, true)
-            || $this->visibility->hasPassword($post)
-        ) {
-            $this->cache->delete($postId);
-
-            return;
-        }
-
-        $markdown = $this->generator->generate($post, $this->metaExtractor->extract($post));
-        $this->cache->write($postId, $markdown);
-    }
-
-    private function enqueue(int $postId): void
-    {
-        if (as_has_scheduled_action(self::REGENERATE_HOOK, [$postId], self::GROUP)) {
-            return;
-        }
-
-        as_enqueue_async_action(self::REGENERATE_HOOK, [$postId], self::GROUP);
-    }
-}
-```
-
-- [ ] **Step 5: Run test to verify it passes**
-
-Run: `vendor/bin/phpunit tests/Unit/Scheduler/ActionSchedulerRegeneratorTest.php`
-Expected: `OK, all 8 tests pass.`
-
-- [ ] **Step 6: Static analysis and style**
-
-Run: `composer stan && composer cs`
-Expected: no errors.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add src/Scheduler/RegeneratorInterface.php src/Scheduler/ActionSchedulerRegenerator.php tests/Unit/Scheduler/ActionSchedulerRegeneratorTest.php
-git commit -m "Add ActionSchedulerRegenerator for async cache regeneration on save"
-```
-
----
-
-### Task 11: PostFinderInterface + WPQueryPostFinder + BackfillScheduler
-
-**Files:**
-- Create: `src/Scheduler/PostFinderInterface.php`
-- Create: `src/Scheduler/WPQueryPostFinder.php`
-- Create: `src/Scheduler/BackfillScheduler.php`
-- Test: `tests/Unit/Scheduler/BackfillSchedulerTest.php`
-
-**Interfaces:**
-- Consumes: `CacheInterface` (Task 3), `MarkdownGeneratorInterface` (Task 7), `PostMetaExtractorInterface` (Task 6), `PostVisibility` (Task 2).
-- Produces:
-  - `Markout\Scheduler\PostFinderInterface::findPublished(array $postTypes, int $limit, int $offset): array` (returns `\WP_Post[]`).
-  - `Markout\Scheduler\WPQueryPostFinder implements PostFinderInterface` — the real `WP_Query`-backed implementation (not unit-tested; it depends on a live `WP_Query`, exercised only via manual QA).
-  - `Markout\Scheduler\BackfillScheduler`, public constant `HOOK = 'markout_backfill_batch'`, constructor `__construct(PostFinderInterface $finder, CacheInterface $cache, MarkdownGeneratorInterface $generator, PostMetaExtractorInterface $metaExtractor, PostVisibility $visibility)`, method `runBatch(int $offset): void`.
-
-Same password rule as Task 10: a password-protected post found in a batch is never cached (any existing entry is deleted instead). The re-enqueue of the next batch is itself deduped with `as_has_scheduled_action()`, matching the pattern already used for `save_post` regeneration, so a manually re-triggered backfill can't produce overlapping batch chains.
-
-- [ ] **Step 1: Write the failing test**
-
-```php
-<?php
-
-declare(strict_types=1);
-
-namespace Markout\Tests\Unit\Scheduler;
-
-use Brain\Monkey\Functions;
-use Markout\Cache\CacheInterface;
-use Markout\Conversion\MarkdownGeneratorInterface;
-use Markout\Scheduler\BackfillScheduler;
-use Markout\Scheduler\PostFinderInterface;
-use Markout\Support\PostMetaExtractorInterface;
-use Markout\Support\PostVisibility;
-use Markout\Tests\TestCase;
-
-final class BackfillSchedulerTest extends TestCase
+final class PostCacherTest extends TestCase
 {
     private function fakeCache(): CacheInterface
     {
@@ -2069,6 +1639,494 @@ final class BackfillSchedulerTest extends TestCase
         };
     }
 
+    public function test_sync_writes_generated_markdown_for_public_post(): void
+    {
+        $cache = $this->fakeCache();
+        $cacher = new PostCacher($cache, $this->fakeGenerator(), $this->fakeMetaExtractor(), new PostVisibility());
+
+        $post = new \WP_Post();
+        $post->ID = 5;
+        $post->post_password = '';
+
+        $cacher->sync($post);
+
+        self::assertSame([[5, 'md-5']], $cache->writes);
+        self::assertSame([], $cache->deletes);
+    }
+
+    public function test_sync_deletes_cache_for_password_protected_post(): void
+    {
+        $cache = $this->fakeCache();
+        $cacher = new PostCacher($cache, $this->fakeGenerator(), $this->fakeMetaExtractor(), new PostVisibility());
+
+        $post = new \WP_Post();
+        $post->ID = 5;
+        $post->post_password = 'secret';
+
+        $cacher->sync($post);
+
+        self::assertSame([], $cache->writes);
+        self::assertSame([5], $cache->deletes);
+    }
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `vendor/bin/phpunit tests/Unit/Scheduler/PostCacherTest.php`
+Expected: FAIL — `Class "Markout\Scheduler\PostCacher" not found`.
+
+- [ ] **Step 3: Write `PostCacherInterface`**
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace Markout\Scheduler;
+
+interface PostCacherInterface
+{
+    public function sync(\WP_Post $post): void;
+}
+```
+
+- [ ] **Step 4: Write `PostCacher`**
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace Markout\Scheduler;
+
+use Markout\Cache\CacheInterface;
+use Markout\Conversion\MarkdownGeneratorInterface;
+use Markout\Support\PostMetaExtractorInterface;
+use Markout\Support\PostVisibility;
+
+final class PostCacher implements PostCacherInterface
+{
+    public function __construct(
+        private readonly CacheInterface $cache,
+        private readonly MarkdownGeneratorInterface $generator,
+        private readonly PostMetaExtractorInterface $metaExtractor,
+        private readonly PostVisibility $visibility
+    ) {
+    }
+
+    public function sync(\WP_Post $post): void
+    {
+        $postId = (int) $post->ID;
+
+        if ($this->visibility->hasPassword($post)) {
+            $this->cache->delete($postId);
+
+            return;
+        }
+
+        $markdown = $this->generator->generate($post, $this->metaExtractor->extract($post));
+        $this->cache->write($postId, $markdown);
+    }
+}
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `vendor/bin/phpunit tests/Unit/Scheduler/PostCacherTest.php`
+Expected: `OK, all 2 tests pass.`
+
+- [ ] **Step 6: Static analysis and style**
+
+Run: `composer stan && composer cs`
+Expected: no errors.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/Scheduler/PostCacherInterface.php src/Scheduler/PostCacher.php tests/Unit/Scheduler/PostCacherTest.php
+git commit -m "Add PostCacher to unify the cache-or-purge policy"
+```
+
+---
+
+### Task 11: RegeneratorInterface + ActionSchedulerRegenerator
+
+**Files:**
+- Create: `src/Scheduler/RegeneratorInterface.php`
+- Create: `src/Scheduler/ActionSchedulerRegenerator.php`
+- Test: `tests/Unit/Scheduler/ActionSchedulerRegeneratorTest.php`
+
+**Interfaces:**
+- Consumes: `CacheInterface` (Task 3), `PostVisibility` (Task 2), `PostCacherInterface` (Task 10).
+- Produces: `Markout\Scheduler\ActionSchedulerRegenerator implements RegeneratorInterface`, public constant `REGENERATE_HOOK = 'markout_regenerate_md'`, methods `register(): void`, `onSave(int $postId, \WP_Post $post, bool $update): void`, `onDelete(int $postId): void`, `handleRegenerate(int $postId): void`.
+
+`onSave`/`onDelete` decide *whether* to enqueue a regeneration or purge the cache immediately (status/type/revision checks); `handleRegenerate` re-validates the post is still eligible, then delegates the actual cache-or-purge work (including the password check) to `PostCacher::sync()`.
+
+- [ ] **Step 1: Write the failing test**
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace Markout\Tests\Unit\Scheduler;
+
+use Brain\Monkey\Functions;
+use Markout\Cache\CacheInterface;
+use Markout\Scheduler\ActionSchedulerRegenerator;
+use Markout\Scheduler\PostCacherInterface;
+use Markout\Support\PostVisibility;
+use Markout\Tests\TestCase;
+
+final class ActionSchedulerRegeneratorTest extends TestCase
+{
+    private function fakeCache(): CacheInterface
+    {
+        return new class implements CacheInterface {
+            public array $writes = [];
+            public array $deletes = [];
+
+            public function get(int $postId): ?string
+            {
+                return null;
+            }
+
+            public function write(int $postId, string $content): bool
+            {
+                $this->writes[] = [$postId, $content];
+
+                return true;
+            }
+
+            public function delete(int $postId): bool
+            {
+                $this->deletes[] = $postId;
+
+                return true;
+            }
+        };
+    }
+
+    /**
+     * @return PostCacherInterface&object{syncedPostIds: int[]}
+     */
+    private function fakeCacher(): PostCacherInterface
+    {
+        return new class implements PostCacherInterface {
+            public array $syncedPostIds = [];
+
+            public function sync(\WP_Post $post): void
+            {
+                $this->syncedPostIds[] = $post->ID;
+            }
+        };
+    }
+
+    public function test_on_save_enqueues_when_publish_allowed_type_and_no_password(): void
+    {
+        Functions\when('wp_is_post_revision')->justReturn(false);
+        Functions\when('wp_is_post_autosave')->justReturn(false);
+        Functions\when('as_has_scheduled_action')->justReturn(false);
+        Functions\expect('as_enqueue_async_action')
+            ->once()
+            ->with(ActionSchedulerRegenerator::REGENERATE_HOOK, [5], 'markout');
+
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $post = new \WP_Post();
+        $post->post_type = 'post';
+        $post->post_status = 'publish';
+        $post->post_password = '';
+
+        $regenerator->onSave(5, $post, true);
+    }
+
+    public function test_on_save_deletes_cache_when_not_publish(): void
+    {
+        Functions\when('wp_is_post_revision')->justReturn(false);
+        Functions\when('wp_is_post_autosave')->justReturn(false);
+
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $post = new \WP_Post();
+        $post->post_type = 'post';
+        $post->post_status = 'draft';
+        $post->post_password = '';
+
+        $regenerator->onSave(5, $post, true);
+
+        self::assertSame([5], $cache->deletes);
+    }
+
+    public function test_on_save_deletes_cache_when_password_protected_even_if_published(): void
+    {
+        Functions\when('wp_is_post_revision')->justReturn(false);
+        Functions\when('wp_is_post_autosave')->justReturn(false);
+
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $post = new \WP_Post();
+        $post->post_type = 'post';
+        $post->post_status = 'publish';
+        $post->post_password = 'secret';
+
+        $regenerator->onSave(5, $post, true);
+
+        self::assertSame([5], $cache->deletes);
+    }
+
+    public function test_on_save_skips_revisions(): void
+    {
+        Functions\when('wp_is_post_revision')->justReturn(true);
+        Functions\when('wp_is_post_autosave')->justReturn(false);
+
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $post = new \WP_Post();
+        $post->post_type = 'post';
+        $post->post_status = 'publish';
+
+        $regenerator->onSave(5, $post, true);
+
+        self::assertSame([], $cache->deletes);
+    }
+
+    public function test_on_delete_removes_cache(): void
+    {
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $regenerator->onDelete(9);
+
+        self::assertSame([9], $cache->deletes);
+    }
+
+    public function test_handle_regenerate_syncs_valid_public_post(): void
+    {
+        $post = new \WP_Post();
+        $post->ID = 3;
+        $post->post_type = 'page';
+        $post->post_status = 'publish';
+
+        Functions\when('get_post')->justReturn($post);
+
+        $cache = $this->fakeCache();
+        $cacher = $this->fakeCacher();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $cacher);
+
+        $regenerator->handleRegenerate(3);
+
+        self::assertSame([3], $cacher->syncedPostIds);
+    }
+
+    public function test_handle_regenerate_deletes_cache_when_post_no_longer_exists(): void
+    {
+        Functions\when('get_post')->justReturn(null);
+
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $regenerator->handleRegenerate(3);
+
+        self::assertSame([3], $cache->deletes);
+    }
+
+    public function test_handle_regenerate_deletes_cache_when_post_is_not_publish(): void
+    {
+        $post = new \WP_Post();
+        $post->ID = 3;
+        $post->post_type = 'page';
+        $post->post_status = 'draft';
+
+        Functions\when('get_post')->justReturn($post);
+
+        $cache = $this->fakeCache();
+        $regenerator = new ActionSchedulerRegenerator($cache, new PostVisibility(), $this->fakeCacher());
+
+        $regenerator->handleRegenerate(3);
+
+        self::assertSame([3], $cache->deletes);
+    }
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `vendor/bin/phpunit tests/Unit/Scheduler/ActionSchedulerRegeneratorTest.php`
+Expected: FAIL — `Class "Markout\Scheduler\ActionSchedulerRegenerator" not found`.
+
+- [ ] **Step 3: Write `RegeneratorInterface`**
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace Markout\Scheduler;
+
+interface RegeneratorInterface
+{
+    public function register(): void;
+}
+```
+
+- [ ] **Step 4: Write `ActionSchedulerRegenerator`**
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace Markout\Scheduler;
+
+use Markout\Cache\CacheInterface;
+use Markout\Support\PostVisibility;
+
+final class ActionSchedulerRegenerator implements RegeneratorInterface
+{
+    public const REGENERATE_HOOK = 'markout_regenerate_md';
+    private const ALLOWED_TYPES = ['post', 'page'];
+    private const GROUP = 'markout';
+
+    public function __construct(
+        private readonly CacheInterface $cache,
+        private readonly PostVisibility $visibility,
+        private readonly PostCacherInterface $cacher
+    ) {
+    }
+
+    public function register(): void
+    {
+        add_action('save_post', [$this, 'onSave'], 10, 3);
+        add_action('before_delete_post', [$this, 'onDelete']);
+        add_action(self::REGENERATE_HOOK, [$this, 'handleRegenerate']);
+    }
+
+    public function onSave(int $postId, \WP_Post $post, bool $update): void
+    {
+        if (wp_is_post_revision($postId) || wp_is_post_autosave($postId)) {
+            return;
+        }
+
+        if (!in_array($post->post_type, self::ALLOWED_TYPES, true)) {
+            return;
+        }
+
+        if ($post->post_status === 'publish' && !$this->visibility->hasPassword($post)) {
+            $this->enqueue($postId);
+
+            return;
+        }
+
+        $this->cache->delete($postId);
+    }
+
+    public function onDelete(int $postId): void
+    {
+        $this->cache->delete($postId);
+    }
+
+    public function handleRegenerate(int $postId): void
+    {
+        $post = get_post($postId);
+
+        if (
+            !($post instanceof \WP_Post)
+            || $post->post_status !== 'publish'
+            || !in_array($post->post_type, self::ALLOWED_TYPES, true)
+        ) {
+            $this->cache->delete($postId);
+
+            return;
+        }
+
+        $this->cacher->sync($post);
+    }
+
+    private function enqueue(int $postId): void
+    {
+        if (as_has_scheduled_action(self::REGENERATE_HOOK, [$postId], self::GROUP)) {
+            return;
+        }
+
+        as_enqueue_async_action(self::REGENERATE_HOOK, [$postId], self::GROUP);
+    }
+}
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `vendor/bin/phpunit tests/Unit/Scheduler/ActionSchedulerRegeneratorTest.php`
+Expected: `OK, all 8 tests pass (one reported as risky, matching the same expect()-only pattern noted in Task 9).`
+
+- [ ] **Step 6: Static analysis and style**
+
+Run: `composer stan && composer cs`
+Expected: no errors.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/Scheduler/RegeneratorInterface.php src/Scheduler/ActionSchedulerRegenerator.php tests/Unit/Scheduler/ActionSchedulerRegeneratorTest.php
+git commit -m "Add ActionSchedulerRegenerator for async cache regeneration on save"
+```
+
+---
+
+### Task 12: PostFinderInterface + WPQueryPostFinder + BackfillScheduler
+
+**Files:**
+- Create: `src/Scheduler/PostFinderInterface.php`
+- Create: `src/Scheduler/WPQueryPostFinder.php`
+- Create: `src/Scheduler/BackfillScheduler.php`
+- Test: `tests/Unit/Scheduler/BackfillSchedulerTest.php`
+
+**Interfaces:**
+- Consumes: `PostCacherInterface` (Task 10).
+- Produces:
+  - `Markout\Scheduler\PostFinderInterface::findPublished(array $postTypes, int $limit, int $offset): array` (returns `\WP_Post[]`).
+  - `Markout\Scheduler\WPQueryPostFinder implements PostFinderInterface` — the real `WP_Query`-backed implementation (not unit-tested; it depends on a live `WP_Query`, exercised only via manual QA).
+  - `Markout\Scheduler\BackfillScheduler`, public constant `HOOK = 'markout_backfill_batch'`, constructor `__construct(PostFinderInterface $finder, PostCacherInterface $cacher)`, method `runBatch(int $offset): void`.
+
+Every post found in a batch is simply handed to `PostCacher::sync()` — the password-safety rule lives there, not duplicated here. The re-enqueue of the next batch is deduped with `as_has_scheduled_action()`, matching the pattern already used for `save_post` regeneration, so a manually re-triggered backfill can't produce overlapping batch chains.
+
+- [ ] **Step 1: Write the failing test**
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace Markout\Tests\Unit\Scheduler;
+
+use Brain\Monkey\Functions;
+use Markout\Scheduler\BackfillScheduler;
+use Markout\Scheduler\PostCacherInterface;
+use Markout\Scheduler\PostFinderInterface;
+use Markout\Tests\TestCase;
+
+final class BackfillSchedulerTest extends TestCase
+{
+    /**
+     * @return PostCacherInterface&object{syncedPostIds: int[]}
+     */
+    private function fakeCacher(): PostCacherInterface
+    {
+        return new class implements PostCacherInterface {
+            public array $syncedPostIds = [];
+
+            public function sync(\WP_Post $post): void
+            {
+                $this->syncedPostIds[] = $post->ID;
+            }
+        };
+    }
+
     private function finderReturning(array $posts): PostFinderInterface
     {
         return new class ($posts) implements PostFinderInterface {
@@ -2083,50 +2141,24 @@ final class BackfillSchedulerTest extends TestCase
         };
     }
 
-    private function makePost(int $id, string $password = ''): \WP_Post
+    private function makePost(int $id): \WP_Post
     {
         $post = new \WP_Post();
         $post->ID = $id;
-        $post->post_password = $password;
 
         return $post;
     }
 
-    public function test_run_batch_writes_cache_for_each_post_found(): void
+    public function test_run_batch_syncs_every_post_found(): void
     {
         $posts = [$this->makePost(1), $this->makePost(2)];
-        $cache = $this->fakeCache();
+        $cacher = $this->fakeCacher();
 
-        $scheduler = new BackfillScheduler(
-            $this->finderReturning($posts),
-            $cache,
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
+        $scheduler = new BackfillScheduler($this->finderReturning($posts), $cacher);
 
         $scheduler->runBatch(0);
 
-        self::assertSame([[1, 'md-1'], [2, 'md-2']], $cache->writes);
-    }
-
-    public function test_run_batch_skips_and_deletes_cache_for_password_protected_posts(): void
-    {
-        $posts = [$this->makePost(1, 'secret'), $this->makePost(2)];
-        $cache = $this->fakeCache();
-
-        $scheduler = new BackfillScheduler(
-            $this->finderReturning($posts),
-            $cache,
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
-
-        $scheduler->runBatch(0);
-
-        self::assertSame([[2, 'md-2']], $cache->writes);
-        self::assertSame([1], $cache->deletes);
+        self::assertSame([1, 2], $cacher->syncedPostIds);
     }
 
     public function test_run_batch_reschedules_when_batch_is_full(): void
@@ -2138,13 +2170,7 @@ final class BackfillSchedulerTest extends TestCase
             ->once()
             ->with(\Mockery::type('int'), BackfillScheduler::HOOK, [20], 'markout');
 
-        $scheduler = new BackfillScheduler(
-            $this->finderReturning($fullBatch),
-            $this->fakeCache(),
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
+        $scheduler = new BackfillScheduler($this->finderReturning($fullBatch), $this->fakeCacher());
 
         $scheduler->runBatch(0);
     }
@@ -2156,13 +2182,7 @@ final class BackfillSchedulerTest extends TestCase
         Functions\when('as_has_scheduled_action')->justReturn(true);
         Functions\expect('as_schedule_single_action')->never();
 
-        $scheduler = new BackfillScheduler(
-            $this->finderReturning($fullBatch),
-            $this->fakeCache(),
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
+        $scheduler = new BackfillScheduler($this->finderReturning($fullBatch), $this->fakeCacher());
 
         $scheduler->runBatch(0);
     }
@@ -2171,13 +2191,7 @@ final class BackfillSchedulerTest extends TestCase
     {
         Functions\expect('as_schedule_single_action')->never();
 
-        $scheduler = new BackfillScheduler(
-            $this->finderReturning([$this->makePost(1)]),
-            $this->fakeCache(),
-            $this->fakeGenerator(),
-            $this->fakeMetaExtractor(),
-            new PostVisibility()
-        );
+        $scheduler = new BackfillScheduler($this->finderReturning([$this->makePost(1)]), $this->fakeCacher());
 
         $scheduler->runBatch(0);
     }
@@ -2248,11 +2262,6 @@ declare(strict_types=1);
 
 namespace Markout\Scheduler;
 
-use Markout\Cache\CacheInterface;
-use Markout\Conversion\MarkdownGeneratorInterface;
-use Markout\Support\PostMetaExtractorInterface;
-use Markout\Support\PostVisibility;
-
 final class BackfillScheduler
 {
     public const HOOK = 'markout_backfill_batch';
@@ -2262,10 +2271,7 @@ final class BackfillScheduler
 
     public function __construct(
         private readonly PostFinderInterface $finder,
-        private readonly CacheInterface $cache,
-        private readonly MarkdownGeneratorInterface $generator,
-        private readonly PostMetaExtractorInterface $metaExtractor,
-        private readonly PostVisibility $visibility
+        private readonly PostCacherInterface $cacher
     ) {
     }
 
@@ -2279,16 +2285,7 @@ final class BackfillScheduler
         $posts = $this->finder->findPublished(self::ALLOWED_TYPES, self::BATCH_SIZE, $offset);
 
         foreach ($posts as $post) {
-            $postId = (int) $post->ID;
-
-            if ($this->visibility->hasPassword($post)) {
-                $this->cache->delete($postId);
-
-                continue;
-            }
-
-            $markdown = $this->generator->generate($post, $this->metaExtractor->extract($post));
-            $this->cache->write($postId, $markdown);
+            $this->cacher->sync($post);
         }
 
         if (count($posts) !== self::BATCH_SIZE) {
@@ -2308,7 +2305,7 @@ final class BackfillScheduler
 - [ ] **Step 6: Run test to verify it passes**
 
 Run: `vendor/bin/phpunit tests/Unit/Scheduler/BackfillSchedulerTest.php`
-Expected: `OK, all 5 tests pass.`
+Expected: `OK, all 4 tests pass (some reported as risky, matching the same expect()-only pattern noted in Task 9).`
 
 - [ ] **Step 7: Static analysis and style**
 
@@ -2324,7 +2321,7 @@ git commit -m "Add BackfillScheduler for populating the cache on activation"
 
 ---
 
-### Task 12: Plugin Bootstrap Wiring
+### Task 13: Plugin Bootstrap Wiring
 
 **Files:**
 - Create: `src/Plugin.php`
@@ -2332,8 +2329,10 @@ git commit -m "Add BackfillScheduler for populating the cache on activation"
 - Test: `tests/Unit/PluginTest.php`
 
 **Interfaces:**
-- Consumes: every class from Tasks 2–11.
-- Produces: `Markout\Plugin`, constructor `__construct(string $cacheDirectory)`, method `boot(): void`, static methods `activate(): void` and `deactivate(): void`. `Plugin` is a pure composition root — it wires dependencies and holds no WordPress-function-calling logic of its own (that all lives in the classes it wires together). `markout.php` is the WordPress plugin entry file — not unit-tested (requires a loaded WordPress runtime), verified via manual QA (Task 14). It also self-checks that Composer dependencies and Action Scheduler are actually available, auto-deactivating with an admin notice rather than fataling if not — this is the spec's required behavior, not just a notice.
+- Consumes: every class from Tasks 2–12.
+- Produces: `Markout\Plugin`, constructor `__construct(string $cacheDirectory)`, method `boot(): void`, static methods `activate(): void` and `deactivate(): void`. `Plugin` is a pure composition root — it wires dependencies and holds no WordPress-function-calling logic beyond the small self-check described below. `markout.php` is the WordPress plugin entry file — not unit-tested (requires a loaded WordPress runtime), verified via manual QA (the final task). It self-checks that Composer dependencies and Action Scheduler are actually available, auto-deactivating with an admin notice rather than fataling if not.
+
+**Why backfill scheduling isn't in `activate()`:** `register_activation_hook` callbacks run in the same request as the rest of the plugin's bootstrap, which means Action Scheduler's own initialization (hooked to `plugins_loaded` at the earliest possible priority) has already run by the time `activate()` executes — so `as_*` functions being *callable* isn't in question. But on a brand-new WordPress install where Markout is the only plugin bundling Action Scheduler, its database tables may not have finished their migration by that same request. Scheduling directly from `activate()` risked the backfill action being silently lost. Instead, `Plugin::boot()` (which always runs from the `plugins_loaded` closure in `markout.php`, on every request) calls `maybeScheduleBackfill()`, which schedules the backfill at most once — guarded by a persistent `markout_backfill_scheduled` option so it doesn't re-check `as_has_scheduled_action()` on every page load once it's done its job. `deactivate()` clears that option, so a deactivate/reactivate cycle re-triggers a fresh backfill, matching the manual QA expectation in the final task.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2385,12 +2384,15 @@ use Markout\Http\MarkdownResponder;
 use Markout\Router\EndpointRouter;
 use Markout\Scheduler\ActionSchedulerRegenerator;
 use Markout\Scheduler\BackfillScheduler;
+use Markout\Scheduler\PostCacher;
 use Markout\Scheduler\WPQueryPostFinder;
 use Markout\Support\PostMetaExtractor;
 use Markout\Support\PostVisibility;
 
 final class Plugin
 {
+    private const BACKFILL_SCHEDULED_OPTION = 'markout_backfill_scheduled';
+
     private readonly EndpointRouter $router;
     private readonly ActionSchedulerRegenerator $regenerator;
     private readonly BackfillScheduler $backfill;
@@ -2408,11 +2410,12 @@ final class Plugin
             $visibility
         );
 
+        $cacher = new PostCacher($cache, $responder, $metaExtractor, $visibility);
         $requestHandler = new MarkdownRequestHandler($responder, $metaExtractor);
 
         $this->router = new EndpointRouter($requestHandler);
-        $this->regenerator = new ActionSchedulerRegenerator($cache, $responder, $metaExtractor, $visibility);
-        $this->backfill = new BackfillScheduler(new WPQueryPostFinder(), $cache, $responder, $metaExtractor, $visibility);
+        $this->regenerator = new ActionSchedulerRegenerator($cache, $visibility, $cacher);
+        $this->backfill = new BackfillScheduler(new WPQueryPostFinder(), $cacher);
     }
 
     public function boot(): void
@@ -2420,24 +2423,36 @@ final class Plugin
         $this->router->register();
         $this->regenerator->register();
         $this->backfill->register();
+        $this->maybeScheduleBackfill();
     }
 
-    public static function activate(): void
+    private function maybeScheduleBackfill(): void
     {
-        flush_rewrite_rules();
-
         if (!function_exists('as_has_scheduled_action') || !function_exists('as_schedule_single_action')) {
+            return;
+        }
+
+        if (get_option(self::BACKFILL_SCHEDULED_OPTION, false)) {
             return;
         }
 
         if (!as_has_scheduled_action(BackfillScheduler::HOOK, [0], 'markout')) {
             as_schedule_single_action(time(), BackfillScheduler::HOOK, [0], 'markout');
         }
+
+        update_option(self::BACKFILL_SCHEDULED_OPTION, true, false);
+    }
+
+    public static function activate(): void
+    {
+        flush_rewrite_rules();
     }
 
     public static function deactivate(): void
     {
         flush_rewrite_rules();
+
+        delete_option(self::BACKFILL_SCHEDULED_OPTION);
 
         if (!function_exists('as_unschedule_all_actions')) {
             return;
@@ -2449,7 +2464,7 @@ final class Plugin
 }
 ```
 
-`$responder` is passed to `ActionSchedulerRegenerator` and `BackfillScheduler` as their `MarkdownGeneratorInterface` argument — `MarkdownResponder` implements that interface, so the single instance is reused for both live-request serving and background regeneration without those two classes needing to know about `MarkdownResponder` itself.
+`$responder` is passed to `PostCacher` as its `MarkdownGeneratorInterface` argument — `MarkdownResponder` implements that interface, so the single instance is reused for both live-request serving and background caching without `PostCacher` needing to know about `MarkdownResponder` itself.
 
 - [ ] **Step 4: Write `markout.php`**
 
@@ -2519,12 +2534,12 @@ register_deactivation_hook(__FILE__, [Plugin::class, 'deactivate']);
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `vendor/bin/phpunit tests/Unit/PluginTest.php`
-Expected: `OK (1 test, 1 assertion)`
+Expected: `OK, all 1 test passes.`
 
 - [ ] **Step 6: Run the full test suite**
 
 Run: `composer test`
-Expected: all tests across every task pass.
+Expected: all tests across every task pass (some marked "risky" per the notes in Tasks 9, 11, and 12 — this is expected, not a failure).
 
 - [ ] **Step 7: Static analysis and style**
 
@@ -2555,13 +2570,13 @@ git commit -m "Wire Plugin bootstrap and add markout.php entry file"
 
 ---
 
-### Task 13: Uninstall Cleanup
+### Task 14: Uninstall Cleanup
 
 **Files:**
 - Create: `uninstall.php`
 
 **Interfaces:**
-- Consumes: nothing from `src/` — deliberately standalone per WordPress's uninstall convention. Not unit-tested; verified manually (Task 14).
+- Consumes: nothing from `src/` — deliberately standalone per WordPress's uninstall convention. Not unit-tested; verified manually (the final task).
 
 The recursive delete is symlink-safe: every path is checked with `is_link()` *before* `is_dir()`. `is_dir()` follows symlinks and would otherwise cause the function to recurse into (and delete the contents of) a symlinked directory's target rather than just removing the link itself.
 
@@ -2611,6 +2626,8 @@ $deleteDir = static function (string $dir) use (&$deleteDir): void {
 
 $deleteDir($cacheDir);
 
+delete_option('markout_backfill_scheduled');
+
 if (function_exists('as_unschedule_all_actions')) {
     as_unschedule_all_actions('markout_regenerate_md', [], 'markout');
     as_unschedule_all_actions('markout_backfill_batch', [], 'markout');
@@ -2633,7 +2650,7 @@ git commit -m "Add uninstall cleanup for cache directory and scheduled actions"
 
 ---
 
-### Task 14: Manual QA
+### Task 15: Manual QA
 
 **Files:** none (verification only — this task confirms behavior that automated tests can't reach: full WordPress runtime, rewrite rules, file permissions, real HTTP requests).
 
@@ -2644,7 +2661,7 @@ Copy the `markout` directory into `wp-content/plugins/`, run `composer install -
 - [ ] **Step 2: Verify pretty-permalink routing**
 
 With pretty permalinks enabled (Settings → Permalinks → Post name), visit `https://<site>/<published-post-slug>/md`.
-Expected: `text/markdown` response with YAML frontmatter followed by the converted body.
+Expected: `text/markdown` response with YAML frontmatter followed by the converted body — for a logged-out visitor, not just while logged in as an administrator.
 
 - [ ] **Step 3: Verify plain-permalink routing**
 
@@ -2675,17 +2692,20 @@ Expected: updated content reflected in the markdown output.
 - [ ] **Step 7: Verify trash/unpublish removes cache**
 
 Move a published post to Trash, then check `wp-content/uploads/markout/<post-id>.md` on disk.
-Expected: file no longer exists.
+Expected: file no longer exists. If it still exists after a few seconds, check whether `wp_trash_post()` fired `save_post` on this WordPress version — if not, this is a known edge case to file as a follow-up (hooking `transition_post_status` as an additional signal), not a blocker for this release.
 
 - [ ] **Step 8: Verify uploads-directory-unwritable fallback**
 
 Temporarily `chmod` the `wp-content/uploads/markout/` directory (or its parent, before creation) to remove write permission, request a `/md` URL for a post with no existing cache file.
 Expected: markdown is still served (generated on the fly); no fatal error; restore permissions afterward.
 
-- [ ] **Step 9: Verify activation backfill**
+- [ ] **Step 9: Verify activation backfill, including re-trigger on reactivation**
 
-On a site with several existing published posts/pages, deactivate and reactivate the plugin, wait for the Action Scheduler queue to process, then check `wp-content/uploads/markout/`.
+On a site with several existing published posts/pages, activate the plugin, wait for the Action Scheduler queue to process, then check `wp-content/uploads/markout/`.
 Expected: a `.md` file exists for every published post and page (and none for any password-protected ones).
+
+Then deactivate and reactivate the plugin.
+Expected: the backfill runs again (the `markout_backfill_scheduled` option is cleared on deactivation specifically so reactivation re-triggers it).
 
 - [ ] **Step 10: Verify missing-dependency self-deactivation**
 
@@ -2695,7 +2715,7 @@ Expected: an admin notice appears ("Markout: missing Composer dependencies...") 
 - [ ] **Step 11: Verify uninstall cleanup**
 
 Deactivate and delete the plugin through the WordPress admin (triggers `uninstall.php`).
-Expected: `wp-content/uploads/markout/` directory is gone; no PHP errors/warnings in the site's debug log.
+Expected: `wp-content/uploads/markout/` directory is gone; the `markout_backfill_scheduled` option is gone; no PHP errors/warnings in the site's debug log.
 
 - [ ] **Step 12: Record results**
 
