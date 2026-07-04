@@ -13,6 +13,11 @@ final class WPQueryPostFinder implements PostFinderInterface
             'post_status' => 'publish',
             'posts_per_page' => $limit,
             'offset' => $offset,
+            // Ordering by ID (rather than the default date order) keeps
+            // offset-based pagination stable across batches even if posts
+            // are edited between backfill runs. no_found_rows skips the
+            // COUNT(*) WP_Query would otherwise run, which BackfillScheduler
+            // doesn't need since it detects the last page by batch size.
             'orderby' => 'ID',
             'order' => 'ASC',
             'no_found_rows' => true,

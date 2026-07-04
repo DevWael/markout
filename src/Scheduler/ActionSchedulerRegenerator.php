@@ -7,6 +7,10 @@ namespace Markout\Scheduler;
 use Markout\Cache\CacheInterface;
 use Markout\Support\PostVisibility;
 
+/**
+ * Keeps the on-disk markdown cache in sync with post save/status-change/
+ * delete events, enqueuing regeneration asynchronously via Action Scheduler.
+ */
 final class ActionSchedulerRegenerator implements RegeneratorInterface
 {
     public const REGENERATE_HOOK = 'markout_regenerate_md';
@@ -20,6 +24,14 @@ final class ActionSchedulerRegenerator implements RegeneratorInterface
     ) {
     }
 
+    // save_post and transition_post_status are both hooked, and both funnel
+    // into the same syncOrPurge() decision. This is deliberate redundancy,
+    // not an oversight: save_post is not guaranteed to fire on every status
+    // change on every WordPress version (e.g. some trashing paths have not
+    // always routed through wp_insert_post()), while transition_post_status
+    // fires on every status change without exception. Calling both hooks
+    // for the same event is harmless — enqueue() is deduped via
+    // as_has_scheduled_action(), and CacheInterface::delete() is idempotent.
     public function register(): void
     {
         add_action('save_post', [$this, 'onSave'], 10, 3);
@@ -66,6 +78,9 @@ final class ActionSchedulerRegenerator implements RegeneratorInterface
         $this->cache->delete($postId);
     }
 
+    // Re-checks status/type/existence rather than trusting the enqueue-time
+    // decision, guarding against a race where the post's status changed
+    // again in the (asynchronous, unbounded) gap between enqueue and run.
     public function handleRegenerate(int $postId): void
     {
         $post = get_post($postId);

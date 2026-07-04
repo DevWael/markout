@@ -10,6 +10,11 @@ use Markout\Conversion\FrontmatterBuilder;
 use Markout\Conversion\MarkdownGeneratorInterface;
 use Markout\Support\PostVisibility;
 
+/**
+ * Ties visibility, caching, and HTML-to-markdown conversion together for a
+ * single post: the password gate, cache hit/miss, and cache-write policy
+ * all live here.
+ */
 final class MarkdownResponder implements MarkdownGeneratorInterface, MarkdownRespondingInterface
 {
     public function __construct(
@@ -34,6 +39,14 @@ final class MarkdownResponder implements MarkdownGeneratorInterface, MarkdownRes
             return new Response(200, 'text/markdown; charset=utf-8', $cached);
         }
 
+        // hasPassword() (stateless: post_password !== '') is deliberately
+        // used here instead of requiresPassword() (session/cookie-aware,
+        // already false at this point since we passed the gate above). A
+        // visitor who entered the correct password must still see the
+        // generated markdown, but their request must never be the one that
+        // populates the on-disk cache: the uploads directory is web
+        // -accessible, so a cached file for a password-protected post would
+        // let any anonymous visitor bypass the password via direct HTTP GET.
         $markdown = $this->generate($post, $meta);
         if (!$this->visibility->hasPassword($post)) {
             $this->cache->write((int) $post->ID, $markdown);

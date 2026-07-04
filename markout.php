@@ -34,6 +34,8 @@ function markout_deactivate_with_notice(string $message): void
     });
 }
 
+// Composer dependencies are required, not bundled; a fresh git checkout
+// without `composer install` must not fatal on every page load.
 $markoutAutoload = __DIR__ . '/vendor/autoload.php';
 if (!file_exists($markoutAutoload)) {
     markout_deactivate_with_notice(
@@ -48,6 +50,9 @@ require_once $markoutAutoload;
 use Markout\Plugin;
 
 add_action('plugins_loaded', static function (): void {
+    // Action Scheduler may be missing if no other active plugin bundles it;
+    // Markout's cache regeneration and backfill both depend on it, so there
+    // is no safe degraded mode to fall back to.
     if (!function_exists('as_enqueue_async_action')) {
         markout_deactivate_with_notice(__('Markout: Action Scheduler is unavailable.', 'markout'));
 

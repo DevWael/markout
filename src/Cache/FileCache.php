@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Markout\Cache;
 
+/**
+ * Stores converted markdown as one file per post under a single
+ * upload-relative directory; not database-backed by design.
+ */
 final class FileCache implements CacheInterface
 {
     private string $directory;
@@ -36,6 +40,10 @@ final class FileCache implements CacheInterface
             return false;
         }
 
+        // Written to a uniquely-named temp file first, then moved into place
+        // with rename() (atomic on the same filesystem), so a concurrent
+        // reader hitting a cache miss can never observe a partially-written
+        // file while an async regeneration job is mid-write.
         $path = $this->path($postId);
         $tempPath = $path . '.' . uniqid('tmp', true);
 

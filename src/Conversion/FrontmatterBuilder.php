@@ -22,6 +22,10 @@ final class FrontmatterBuilder
 
     private function quote(string $value): string
     {
+        // Order matters: backslashes must be escaped before quotes. Escaping
+        // quotes first would double-escape the backslash that step just
+        // introduced, producing a malformed sequence instead of valid
+        // double-quoted YAML.
         $escaped = str_replace(['\\', '"'], ['\\\\', '\\"'], $value);
 
         return '"' . $escaped . '"';

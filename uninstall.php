@@ -9,6 +9,10 @@ if (!defined('WP_UNINSTALL_PLUGIN')) {
 $uploadDir = wp_upload_dir();
 $cacheDir = rtrim((string) $uploadDir['basedir'], '/') . '/markout';
 
+// Symlinks are unlinked rather than recursed into or rmdir'd — is_dir()
+// follows symlinks, so without this check a symlinked directory inside the
+// cache dir would cause recursion into (and deletion of) whatever it points
+// to, anywhere on the filesystem.
 $deleteDir = static function (string $dir) use (&$deleteDir): void {
     if (is_link($dir)) {
         unlink($dir);

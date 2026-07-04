@@ -17,6 +17,10 @@ use Markout\Scheduler\WPQueryPostFinder;
 use Markout\Support\PostMetaExtractor;
 use Markout\Support\PostVisibility;
 
+/**
+ * Composition root: wires the plugin's collaborators and drives the
+ * WordPress activation/deactivation/boot lifecycle.
+ */
 final class Plugin
 {
     private const BACKFILL_SCHEDULED_OPTION = 'markout_backfill_scheduled';
@@ -54,6 +58,17 @@ final class Plugin
         $this->maybeScheduleBackfill();
     }
 
+    // Runs on every `plugins_loaded` rather than in activate(): Action
+    // Scheduler's own data store may not have finished migrating yet at
+    // activation time on a brand-new install, so scheduling here instead
+    // doubles as the "did activation actually take" self-check.
+    //
+    // add_option() is used as an atomic insert-if-absent guard rather than
+    // a get_option()-then-update_option() pair: the latter is a
+    // check-then-act race that lets two near-simultaneous requests both
+    // pass the check and each enqueue an overlapping backfill chain.
+    // add_option() can only succeed once for a given option name, so at
+    // most one request ever wins the race and schedules the backfill.
     private function maybeScheduleBackfill(): void
     {
         if (!function_exists('as_schedule_single_action')) {
