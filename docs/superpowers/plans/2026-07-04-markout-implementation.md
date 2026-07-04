@@ -2622,7 +2622,7 @@ Expected: all tests across every task pass (some marked "risky" per the notes in
 
 - [ ] **Step 7: Static analysis and style**
 
-Add `markout.php` to `phpcs.xml`'s file list:
+Add `markout.php` to `phpcs.xml`'s file list. Like `tests/bootstrap.php`, it needs its own exclusion: PSR-1's `SideEffects` sniff flags any file that both declares something (the `markout_deactivate_with_notice()` helper, the `MARKOUT_PLUGIN_FILE` constant) and executes side effects (`add_action`, `register_activation_hook`) in the same file — which is simply what a WordPress plugin main file *is*. This is a real false positive for this file's role, not a code smell to fix by restructuring.
 
 ```xml
 <?xml version="1.0"?>
@@ -2633,7 +2633,14 @@ Add `markout.php` to `phpcs.xml`'s file list:
     <file>src</file>
     <file>tests</file>
     <file>markout.php</file>
+    <exclude-pattern>tests/bootstrap\.php$</exclude-pattern>
     <rule ref="PSR12"/>
+    <rule ref="PSR1.Methods.CamelCapsMethodName">
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
+    <rule ref="PSR1.Files.SideEffects">
+        <exclude-pattern>markout\.php$</exclude-pattern>
+    </rule>
 </ruleset>
 ```
 
