@@ -5,3 +5,5 @@ parameters:
     level: 8
     paths:
         - src
+    bootstrapFiles:
+        - vendor/woocommerce/action-scheduler/functions.php
