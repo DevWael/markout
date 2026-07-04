@@ -6,6 +6,7 @@
     <file>src</file>
     <file>tests</file>
     <file>markout.php</file>
+    <file>uninstall.php</file>
     <exclude-pattern>tests/bootstrap\.php$</exclude-pattern>
     <rule ref="PSR12"/>
     <!-- PHPUnit's idiomatic test_snake_case naming is exempted; PSR-12
@@ -16,8 +17,11 @@
     <!-- markout.php is the WordPress plugin entry file: it necessarily both
          declares a helper function/constant and executes bootstrap side
          effects (add_action, register_activation_hook, etc.), which is the
-         norm for WP plugin main files and not a real PSR-1 violation here. -->
+         norm for WP plugin main files and not a real PSR-1 violation here.
+         uninstall.php is the WordPress uninstall-lifecycle file: it is
+         executed only when the plugin is deleted via the admin, and
+         consists entirely of cleanup side effects, which is expected. -->
     <rule ref="PSR1.Files.SideEffects">
-        <exclude-pattern>markout\.php$</exclude-pattern>
+        <exclude-pattern>(markout|uninstall)\.php$</exclude-pattern>
     </rule>
 </ruleset>
