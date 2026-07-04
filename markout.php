@@ -9,6 +9,7 @@
  * Author URI: https://bbioon.com
  * License: GPL-2.0-or-later
  * Text Domain: markout
+ * Domain Path: /languages
  */
 
 declare(strict_types=1);
@@ -18,6 +19,11 @@ if (!defined('ABSPATH')) {
 }
 
 define('MARKOUT_PLUGIN_FILE', __FILE__);
+
+// Loaded unhooked, not on 'init': the missing-Composer-dependencies notice
+// below is built (and its __() call resolved) before any WordPress action
+// fires, since that check runs at top-level file inclusion.
+load_plugin_textdomain('markout', false, dirname(plugin_basename(MARKOUT_PLUGIN_FILE)) . '/languages');
 
 function markout_deactivate_with_notice(string $message): void
 {
