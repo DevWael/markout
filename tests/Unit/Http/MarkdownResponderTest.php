@@ -102,6 +102,52 @@ final class MarkdownResponderTest extends TestCase
         self::assertSame(42, $cache->writes[0][0]);
     }
 
+    public function test_respond_does_not_cache_when_post_has_password_even_if_visitor_is_authorized(): void
+    {
+        // Visitor has entered the correct password (wp-postpass cookie set),
+        // so post_password_required() returns false — but the post itself
+        // is still password-protected.
+        Functions\when('post_password_required')->justReturn(false);
+
+        $cache = new class implements CacheInterface {
+            public array $writes = [];
+
+            public function get(int $postId): ?string
+            {
+                return null;
+            }
+
+            public function write(int $postId, string $content): bool
+            {
+                $this->writes[] = [$postId, $content];
+
+                return true;
+            }
+
+            public function delete(int $postId): bool
+            {
+                return true;
+            }
+        };
+
+        $post = new \WP_Post();
+        $post->ID = 42;
+        $post->post_password = 'secret';
+
+        $responder = new MarkdownResponder(
+            $cache,
+            $this->converterReturning('BODY'),
+            new FrontmatterBuilder(),
+            new PostVisibility()
+        );
+
+        $response = $responder->respond($post, $this->meta());
+
+        self::assertSame(200, $response->status);
+        self::assertStringContainsString('BODY', $response->body);
+        self::assertCount(0, $cache->writes);
+    }
+
     private function cacheReturning(?string $value): CacheInterface
     {
         return new class ($value) implements CacheInterface {

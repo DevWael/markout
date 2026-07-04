@@ -35,7 +35,9 @@ final class MarkdownResponder implements MarkdownGeneratorInterface, MarkdownRes
         }
 
         $markdown = $this->generate($post, $meta);
-        $this->cache->write((int) $post->ID, $markdown);
+        if (!$this->visibility->hasPassword($post)) {
+            $this->cache->write((int) $post->ID, $markdown);
+        }
 
         return new Response(200, 'text/markdown; charset=utf-8', $markdown);
     }
