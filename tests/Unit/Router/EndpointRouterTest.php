@@ -61,6 +61,36 @@ final class EndpointRouterTest extends TestCase
         self::assertNull($handler->handledPost);
     }
 
+    public function test_maybe_respond_does_nothing_when_not_singular(): void
+    {
+        $handler = $this->fakeHandler();
+        $router = new EndpointRouter($handler);
+
+        $GLOBALS['wp'] = (object) ['query_vars' => ['md' => '']];
+
+        Functions\when('is_singular')->justReturn(false);
+
+        $router->maybeRespond();
+
+        self::assertNull($handler->handledPost);
+    }
+
+    public function test_maybe_respond_does_nothing_when_queried_object_is_not_a_post(): void
+    {
+        $handler = $this->fakeHandler();
+        $router = new EndpointRouter($handler);
+
+        $GLOBALS['wp'] = (object) ['query_vars' => ['md' => '']];
+
+        Functions\when('is_singular')->justReturn(true);
+        // e.g. a term/user archive object, or null — anything that is not WP_Post.
+        Functions\when('get_queried_object')->justReturn(null);
+
+        $router->maybeRespond();
+
+        self::assertNull($handler->handledPost);
+    }
+
     public function test_register_hooks_into_init_and_template_redirect(): void
     {
         Functions\expect('add_action')->twice();
@@ -68,6 +98,39 @@ final class EndpointRouterTest extends TestCase
         $router = new EndpointRouter($this->fakeHandler());
 
         $router->register();
+    }
+
+    public function test_register_init_callback_declares_rewrite_endpoint(): void
+    {
+        if (!defined('EP_PERMALINK')) {
+            define('EP_PERMALINK', 1024);
+        }
+
+        $initCallback = null;
+        Functions\when('add_action')->alias(
+            static function (string $hook, callable $callback) use (&$initCallback): void {
+                if ($hook === 'init') {
+                    $initCallback = $callback;
+                }
+            }
+        );
+
+        $router = new EndpointRouter($this->fakeHandler());
+        $router->register();
+
+        self::assertIsCallable($initCallback);
+
+        // Invoke the captured init callback and assert it registers the endpoint.
+        $registered = null;
+        Functions\when('add_rewrite_endpoint')->alias(
+            static function (string $name, int $places) use (&$registered): void {
+                $registered = [$name, $places];
+            }
+        );
+
+        $initCallback();
+
+        self::assertSame(['md', EP_PERMALINK], $registered);
     }
 
     /**
