@@ -739,7 +739,7 @@ git commit -m "Add YAML frontmatter builder"
   - `Markout\Conversion\HtmlToMarkdownConverter implements ConverterInterface`, constructor `__construct(?\League\HTMLToMarkdown\HtmlConverter $converter = null)`.
   - Used by `MarkdownResponder` (Task 7).
 
-**Note on the test below:** `League\HTMLToMarkdown\HtmlConverter::convert()` declares its `$html` parameter with **no type hint** (`public function convert($html)`, no return type either). A subclass overriding a method may only *widen* types, never narrow an untyped parameter to a typed one — doing so is a fatal "declaration must be compatible" error at class-load time, not a test failure. The forcing-a-throw subclass below therefore matches the parent's untyped signature exactly.
+**Note on the test below:** the installed `league/html-to-markdown` (`^5.1`) declares `HtmlConverter::convert()` as `public function convert(string $html): string` — fully typed. The forcing-a-throw subclass below overrides it with the identical signature. (An earlier draft of this plan assumed the parameter was untyped based on a check against a different version/branch; always verify a third-party library's actual installed signature — e.g. `grep -n "function convert" vendor/league/html-to-markdown/src/HtmlConverter.php` — rather than trusting a cached assumption, since overriding a *typed* parent parameter with a mismatched type is a fatal "declaration must be compatible" error at class-load time, not a test failure.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -768,7 +768,7 @@ final class HtmlToMarkdownConverterTest extends TestCase
     public function test_convert_falls_back_to_stripped_tags_on_failure(): void
     {
         $throwingConverter = new class (['strip_tags' => true]) extends HtmlConverter {
-            public function convert($html)
+            public function convert(string $html): string
             {
                 throw new \RuntimeException('boom');
             }
