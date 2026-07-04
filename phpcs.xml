@@ -3,25 +3,76 @@
     <arg name="basepath" value="."/>
     <arg name="extensions" value="php"/>
     <arg name="colors"/>
+    <arg value="sp"/>
     <file>src</file>
     <file>tests</file>
     <file>markout.php</file>
     <file>uninstall.php</file>
     <exclude-pattern>tests/bootstrap\.php$</exclude-pattern>
-    <rule ref="PSR12"/>
-    <!-- PHPUnit's idiomatic test_snake_case naming is exempted; PSR-12
-         camelCase enforcement still applies to production code in src/. -->
-    <rule ref="PSR1.Methods.CamelCapsMethodName">
+
+    <!-- WordPress-Extra: Core formatting plus the recommended additional
+         best-practice sniffs (security/escaping, i18n, hooks). Deliberately
+         not the "WordPress" umbrella ruleset, which also pulls in
+         WordPress-Docs (mandatory docblock-on-everything) — this codebase's
+         comment convention is WHY-only, not WHAT-boilerplate on every
+         method, matching the dedicated comments pass already done. -->
+    <rule ref="WordPress-Extra">
+        <!-- This codebase is PSR-4 autoloaded OOP with camelCase methods
+             and variables, the convention PHP itself and every other
+             framework/library this plugin depends on (league/html-to-markdown,
+             Action Scheduler's OOP classes, PHPUnit) uses. WPCS's naming
+             sniffs assume WordPress core's own snake_case convention, which
+             is a stylistic choice, not a correctness or security concern —
+             excluded so the rest of WPCS's genuinely WordPress-specific
+             checks (escaping, i18n, hook usage, security) stay strict. -->
+        <exclude name="WordPress.NamingConventions.ValidFunctionName"/>
+        <exclude name="WordPress.NamingConventions.ValidVariableName"/>
+
+        <!-- WPCS wants class-name.php-style filenames; PSR-4 autoloading
+             requires the filename to match the class name exactly. This is
+             a hard technical conflict, not a style preference — every file
+             in src/ would fail to autoload if renamed to satisfy this. -->
+        <exclude name="WordPress.Files.FileName"/>
+
+        <!-- Recommends the WP_Filesystem API over raw PHP filesystem calls.
+             FileCache's atomic-write-via-rename and uninstall.php's
+             symlink-safe recursive delete were built and reviewed around
+             native PHP calls; migrating to WP_Filesystem needs its own
+             design pass (front-end request context can't use
+             request_filesystem_credentials(), so it requires a
+             direct-method-only-with-fallback approach) — tracked as a
+             follow-up, not done in this pass. -->
+        <exclude name="WordPress.WP.AlternativeFunctions"/>
+    </rule>
+
+    <!-- Text domain used in every __()/_e() call must be exactly 'markout'. -->
+    <rule ref="WordPress.WP.I18n">
+        <properties>
+            <property name="text_domain" type="array">
+                <element value="markout"/>
+            </property>
+        </properties>
+    </rule>
+
+    <!-- $GLOBALS['wp'] is faked here as a test double for EndpointRouter's
+         defensive read of the WP global — not a production override. -->
+    <rule ref="WordPress.WP.GlobalVariablesOverride">
         <exclude-pattern>tests/*</exclude-pattern>
     </rule>
-    <!-- markout.php is the WordPress plugin entry file: it necessarily both
-         declares a helper function/constant and executes bootstrap side
-         effects (add_action, register_activation_hook, etc.), which is the
-         norm for WP plugin main files and not a real PSR-1 violation here.
-         uninstall.php is the WordPress uninstall-lifecycle file: it is
-         executed only when the plugin is deleted via the admin, and
-         consists entirely of cleanup side effects, which is expected. -->
-    <rule ref="PSR1.Files.SideEffects">
-        <exclude-pattern>(markout|uninstall)\.php$</exclude-pattern>
+
+    <!-- Test-only teardown hygiene: @unlink/@rmdir/@chmod calls that clean
+         up temp fixtures and don't care whether the target already exists;
+         and ini_set('error_log', ...) redirecting PHP's own error log to a
+         temp file so a test can assert on its contents. Neither pattern
+         appears in production code. -->
+    <rule ref="WordPress.PHP.NoSilencedErrors">
+        <exclude-pattern>tests/*</exclude-pattern>
     </rule>
+    <rule ref="WordPress.PHP.IniSet">
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
+
+    <!-- PHPUnit's idiomatic test_snake_case method naming already matches
+         WPCS's snake_case preference, so no naming exclusion is needed for
+         tests/ beyond the blanket exclusion above. -->
 </ruleset>
