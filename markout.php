@@ -1,0 +1,60 @@
+<?php
+
+/**
+ * Plugin Name: Markout
+ * Description: Serve a markdown version of any post or page via /md.
+ * Version: 0.1.0
+ * Requires PHP: 8.1
+ * License: GPL-2.0-or-later
+ */
+
+declare(strict_types=1);
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+define('MARKOUT_PLUGIN_FILE', __FILE__);
+
+function markout_deactivate_with_notice(string $message): void
+{
+    add_action('admin_notices', static function () use ($message): void {
+        printf('<div class="notice notice-error"><p>%s</p></div>', esc_html($message));
+    });
+
+    add_action('admin_init', static function (): void {
+        if (!function_exists('deactivate_plugins')) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+
+        deactivate_plugins(plugin_basename(MARKOUT_PLUGIN_FILE));
+    });
+}
+
+$markoutAutoload = __DIR__ . '/vendor/autoload.php';
+if (!file_exists($markoutAutoload)) {
+    markout_deactivate_with_notice(
+        'Markout: missing Composer dependencies. Run composer install in the plugin directory.'
+    );
+
+    return;
+}
+
+require_once $markoutAutoload;
+
+use Markout\Plugin;
+
+add_action('plugins_loaded', static function (): void {
+    if (!function_exists('as_enqueue_async_action')) {
+        markout_deactivate_with_notice('Markout: Action Scheduler is unavailable.');
+
+        return;
+    }
+
+    $uploadDir = wp_upload_dir();
+    $plugin = new Plugin(rtrim((string) $uploadDir['basedir'], '/') . '/markout');
+    $plugin->boot();
+});
+
+register_activation_hook(__FILE__, [Plugin::class, 'activate']);
+register_deactivation_hook(__FILE__, [Plugin::class, 'deactivate']);
