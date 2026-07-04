@@ -48,6 +48,10 @@ $deleteDir($cacheDir);
 delete_option('markout_backfill_scheduled');
 
 if (function_exists('as_unschedule_all_actions')) {
-    as_unschedule_all_actions('markout_regenerate_md', [], 'markout');
-    as_unschedule_all_actions('markout_backfill_batch', [], 'markout');
+    // Args MUST be null (wildcard: match any args), not [] here. Passing []
+    // is an exact-match filter for actions scheduled with literally no args,
+    // so it would never match this plugin's actions (always scheduled with
+    // [$postId] or [$offset]) and the cleanup would no-op.
+    as_unschedule_all_actions('markout_regenerate_md', null, 'markout');
+    as_unschedule_all_actions('markout_backfill_batch', null, 'markout');
 }

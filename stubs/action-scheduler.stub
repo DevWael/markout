@@ -1,0 +1,24 @@
+<?php
+
+/**
+ * PHPStan stub correcting Action Scheduler's imprecise vendor PHPDoc.
+ *
+ * The bundled functions.php annotates $args as `array`, but the runtime
+ * contract accepts null: `as_unschedule_action()` guards with
+ * `if ( is_array( $args ) )` before applying the args filter, and the DB
+ * store treats a null args value as a wildcard (match ANY args) rather than
+ * an exact match on empty args. Passing null is the documented way to
+ * "unschedule all actions for a hook regardless of args", so the parameter
+ * type must allow it. Without this stub PHPStan (level 8) rejects the null
+ * argument in Markout\Plugin::deactivate().
+ */
+
+/**
+ * @param string       $hook  The hook that the job will trigger.
+ * @param mixed[]|null $args  Args that would have been passed to the job.
+ *                            Null matches any args (wildcard).
+ * @param string       $group The group the job is assigned to.
+ */
+function as_unschedule_all_actions($hook, $args = array(), $group = ''): void
+{
+}

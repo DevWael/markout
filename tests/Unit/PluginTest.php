@@ -97,23 +97,34 @@ final class PluginTest extends TestCase
             }
         );
 
-        $unscheduledHooks = [];
-        Functions\when('as_unschedule_all_actions')->alias(
-            static function (string $hook, array $args, string $group) use (&$unscheduledHooks): void {
-                $unscheduledHooks[] = $hook;
-            }
-        );
+        // Each hook MUST be unscheduled with a null args wildcard, not an
+        // empty-array filter. Passing [] makes Action Scheduler exact-match
+        // actions with literally no args, so it would never match this
+        // plugin's actions (scheduled with [$postId] / [$offset]) and the
+        // cleanup would silently no-op. Regression guard for that bug.
+        //
+        // Mockery::mustBe() forces strict (===) comparison on the args
+        // argument. The default ->with() matcher compares loosely (==), under
+        // which null == [] is true, so it would pass even for the buggy []
+        // call and fail to catch the regression.
+        Functions\expect('as_unschedule_all_actions')
+            ->once()
+            ->with(
+                \Markout\Scheduler\ActionSchedulerRegenerator::REGENERATE_HOOK,
+                \Mockery::mustBe(null),
+                'markout'
+            );
+        Functions\expect('as_unschedule_all_actions')
+            ->once()
+            ->with(
+                \Markout\Scheduler\BackfillScheduler::HOOK,
+                \Mockery::mustBe(null),
+                'markout'
+            );
 
         Plugin::deactivate();
 
         self::assertSame(1, $flushed);
         self::assertSame('markout_backfill_scheduled', $deletedOption);
-        self::assertSame(
-            [
-                \Markout\Scheduler\ActionSchedulerRegenerator::REGENERATE_HOOK,
-                \Markout\Scheduler\BackfillScheduler::HOOK,
-            ],
-            $unscheduledHooks
-        );
     }
 }

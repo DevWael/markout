@@ -97,7 +97,11 @@ final class Plugin
             return;
         }
 
-        as_unschedule_all_actions(ActionSchedulerRegenerator::REGENERATE_HOOK, [], 'markout');
-        as_unschedule_all_actions(BackfillScheduler::HOOK, [], 'markout');
+        // Args MUST be null (wildcard: match any args), not [] here. Passing
+        // [] is an exact-match filter for actions scheduled with literally no
+        // args, so it would never match this plugin's actions (always
+        // scheduled with [$postId] or [$offset]) and the cleanup would no-op.
+        as_unschedule_all_actions(ActionSchedulerRegenerator::REGENERATE_HOOK, null, 'markout');
+        as_unschedule_all_actions(BackfillScheduler::HOOK, null, 'markout');
     }
 }

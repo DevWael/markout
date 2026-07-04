@@ -7,3 +7,5 @@ parameters:
         - src
     bootstrapFiles:
         - vendor/woocommerce/action-scheduler/functions.php
+    stubFiles:
+        - stubs/action-scheduler.stub
