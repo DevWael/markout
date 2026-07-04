@@ -1542,6 +1542,9 @@ final class EndpointRouter implements RouterInterface
         $this->handler->handle($post);
     }
 
+    /**
+     * @param array<string, mixed> $queryVars
+     */
     public function isMarkdownRequest(array $queryVars): bool
     {
         return array_key_exists(self::ENDPOINT, $queryVars);
