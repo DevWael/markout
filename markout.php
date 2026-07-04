@@ -5,7 +5,10 @@
  * Description: Serve a markdown version of any post or page via /md.
  * Version: 0.1.0
  * Requires PHP: 8.1
+ * Author: Ahmad Wael
+ * Author URI: https://bbioon.com
  * License: GPL-2.0-or-later
+ * Text Domain: markout
  */
 
 declare(strict_types=1);
@@ -34,7 +37,7 @@ function markout_deactivate_with_notice(string $message): void
 $markoutAutoload = __DIR__ . '/vendor/autoload.php';
 if (!file_exists($markoutAutoload)) {
     markout_deactivate_with_notice(
-        'Markout: missing Composer dependencies. Run composer install in the plugin directory.'
+        __('Markout: missing Composer dependencies. Run composer install in the plugin directory.', 'markout')
     );
 
     return;
@@ -46,7 +49,7 @@ use Markout\Plugin;
 
 add_action('plugins_loaded', static function (): void {
     if (!function_exists('as_enqueue_async_action')) {
-        markout_deactivate_with_notice('Markout: Action Scheduler is unavailable.');
+        markout_deactivate_with_notice(__('Markout: Action Scheduler is unavailable.', 'markout'));
 
         return;
     }
