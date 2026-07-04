@@ -45,4 +45,15 @@ final class PostVisibilityTest extends TestCase
 
         self::assertFalse((new PostVisibility())->hasPassword($post));
     }
+
+    public function test_has_password_true_when_post_password_is_only_whitespace(): void
+    {
+        // A whitespace-only password is non-empty, so the strict !== '' check
+        // treats it as password-protected. This guards against a future refactor
+        // to trim()/empty() silently exposing such posts.
+        $post = new \WP_Post();
+        $post->post_password = '   ';
+
+        self::assertTrue((new PostVisibility())->hasPassword($post));
+    }
 }

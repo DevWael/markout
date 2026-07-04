@@ -58,4 +58,48 @@ final class FrontmatterBuilderTest extends TestCase
 
         self::assertStringContainsString('title: "C:\\\\Users\\\\test"', $result);
     }
+
+    public function test_build_renders_empty_value_as_empty_quoted_string(): void
+    {
+        $builder = new FrontmatterBuilder();
+
+        $result = $builder->build([
+            'title' => '',
+            'date' => '2026-07-04T00:00:00+00:00',
+            'author' => 'Ahmad',
+            'permalink' => 'https://example.com/x/',
+        ]);
+
+        self::assertStringContainsString("title: \"\"\n", $result);
+    }
+
+    public function test_build_escapes_a_value_consisting_only_of_backslashes(): void
+    {
+        $builder = new FrontmatterBuilder();
+
+        $result = $builder->build([
+            'title' => '\\\\\\',
+            'date' => '2026-07-04T00:00:00+00:00',
+            'author' => 'Ahmad',
+            'permalink' => 'https://example.com/x/',
+        ]);
+
+        // Three backslashes must each double to six.
+        self::assertStringContainsString('title: "\\\\\\\\\\\\"', $result);
+    }
+
+    public function test_build_escapes_a_value_consisting_only_of_quotes(): void
+    {
+        $builder = new FrontmatterBuilder();
+
+        $result = $builder->build([
+            'title' => '"""',
+            'date' => '2026-07-04T00:00:00+00:00',
+            'author' => 'Ahmad',
+            'permalink' => 'https://example.com/x/',
+        ]);
+
+        // Each double quote must be backslash-escaped.
+        self::assertStringContainsString('title: "\\"\\"\\""', $result);
+    }
 }
